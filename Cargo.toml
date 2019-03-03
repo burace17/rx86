@@ -1,0 +1,7 @@
+[package]
+name = "rx86"
+version = "0.1.0"
+authors = ["Blair Urish <burace17@gmail.com>"]
+edition = "2018"
+
+[dependencies]
