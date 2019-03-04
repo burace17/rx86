@@ -181,8 +181,31 @@ ip: 0x{:X}",
         process::exit(0);
     }
 
+    pub fn dump_video_ram(&self) {
+        let mut j = 0;
+        for i in 0x8000..0xA000 {
+            let val = self.mem[i as usize];
+            if val == 0 {
+                print!(" ");
+            }
+            else {
+                let c = char::from(val);
+                print!("{}", c);
+            }
+
+            if j == 25 {
+                println!("");
+                j = 0;
+            }
+            else {
+                j += 1;
+            }
+        }
+    }
+
     fn cpu_panic(&self, msg: &str) -> ! {
         println!("----------------------");
+        //self.dump_video_ram();
         self.dump_registers();
         panic!("{}", msg);
     }
