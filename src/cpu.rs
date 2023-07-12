@@ -153,10 +153,10 @@ impl CPU {
 
     pub fn emulate(&mut self) {
         loop {
-            println!("--------------");
-            println!("starting cycle");
-            self.dump_registers();
-            println!("--------------");
+            // println!("--------------");
+            // println!("starting cycle");
+            // self.dump_registers();
+            // println!("--------------");
             self.do_cycle();
         }
     }
@@ -205,7 +205,7 @@ ip: 0x{:X}",
 
     fn cpu_panic(&self, msg: &str) -> ! {
         println!("----------------------");
-        //self.dump_video_ram();
+        self.dump_video_ram();
         self.dump_registers();
         panic!("{}", msg);
     }
@@ -358,7 +358,7 @@ ip: 0x{:X}",
        let id_reg = (modrm_byte & 0x38) >> 3;
        let id_rm = modrm_byte & 0x07;
 
-       let byte_op: Box<Fn(&mut u8, u8, &mut u16)> = match id_reg {
+       let byte_op: Box<dyn Fn(&mut u8, u8, &mut u16)> = match id_reg {
            0x00 => Box::new(|rm: &mut u8, imm: u8, mut flag: &mut u16| {
                        // self.cpu_debug_msg("ADD Eb, Ib"); 
                        let old = *rm;
@@ -416,7 +416,7 @@ ip: 0x{:X}",
            reg => self.cpu_panic(&format!("Opext byte instruction: failed to parse REG: {}", reg))
        };
 
-       let word_op: Box<Fn(&mut u16, u16, &mut u16)> = match id_reg {
+       let word_op: Box<dyn Fn(&mut u16, u16, &mut u16)> = match id_reg {
            0x00 => Box::new(|rm: &mut u16, imm: u16, mut flag: &mut u16| {
                        let old = *rm;
                        *rm = old.wrapping_add(imm); 
@@ -482,6 +482,7 @@ ip: 0x{:X}",
                 let mut rm = read_word(&mut self.mem, address as usize);
                 word_op(&mut rm, imm as u16, &mut self.flag);
                 write_word(&mut self.mem, address as usize, rm);
+                // TODO check ip increment for this case..
            }
            else {
                 let imm = self.mem[ip + 2];
@@ -900,7 +901,7 @@ ip: 0x{:X}",
                         calc_sub_word_flags(&mut flag, *ax, imm, val);
                         return 2; 
                     })(self.ip, &self.mem, &mut self.ax, &mut self.flag),
-            0x40 => inc_reg(&mut self.ax),
+            0x40 => inc_reg(&mut self.ax), // TODO set flags...
             0x41 => inc_reg(&mut self.cx),
             0x42 => inc_reg(&mut self.dx),
             0x43 => inc_reg(&mut self.bx),
@@ -1001,14 +1002,6 @@ ip: 0x{:X}",
                         }
                         return 2;
                     })(&self.mem, &mut self.ip, self.flag),
-            /*
-             * 0x76 => (|mem: &[u8;65536], ip: &mut u16, flag: u16| {
-             *             if flag.get_bit(CARRY_FLAG) || flag.get_bit(ZERO_FLAG) {
-             *                 *ip += mem[(*ip + 1) as usize] as u16;
-             *             }
-             *             return 2;
-             *         })(&self.mem, &mut self.ip, self.flag),
-             */
             0x80 => self.do_opext_inst(false, false),
             0x81 => self.do_opext_inst(true, false),
             0x82 => self.do_opext_inst(false, false),
@@ -1079,7 +1072,6 @@ ip: 0x{:X}",
                         flag.set_bit(CARRY_FLAG, true);
                         return 1;
                     })(&mut self.flag),
-
             
             inst => self.cpu_panic(&format!("Unknown instruction: 0x{:X}", inst))
         };
@@ -1135,7 +1127,7 @@ mod tests {
     use crate::cpu::SIGN_FLAG;
     #[test]
     fn cpu_sanity() {
-        let mut cpu = CPU::new();
+        let mut cpu = CPU::new(false);
         cpu.ax = 69;
         cpu.cx = 42;
         cpu.dx = 1;
@@ -1197,7 +1189,7 @@ mod tests {
 
     #[test]
     fn cpu_byte_sanity() {
-        let mut cpu = CPU::new();
+        let mut cpu = CPU::new(false);
         cpu.ax = 27;
         cpu.mem[0] = 0x00;
         cpu.mem[1] = 0x06;
@@ -1209,7 +1201,7 @@ mod tests {
         assert_eq!(cpu.flag.get_bit(CARRY_FLAG), false);
         assert_eq!(cpu.flag.get_bit(SIGN_FLAG), false);
 
-        cpu = CPU::new();
+        cpu = CPU::new(false);
         cpu.cx = 245;
         cpu.mem[0] = 0x00;
         cpu.mem[1] = 0x0E;
@@ -1221,7 +1213,7 @@ mod tests {
         assert_eq!(cpu.flag.get_bit(CARRY_FLAG), true);
         assert_eq!(cpu.flag.get_bit(SIGN_FLAG), false);
 
-        cpu = CPU::new();
+        cpu = CPU::new(false);
         cpu.bx = 125;
         cpu.mem[0] = 0x00;
         cpu.mem[1] = 0x1E;
@@ -1233,7 +1225,7 @@ mod tests {
         assert_eq!(cpu.flag.get_bit(CARRY_FLAG), false);
         assert_eq!(cpu.flag.get_bit(SIGN_FLAG), true);
 
-        cpu = CPU::new();
+        cpu = CPU::new(false);
         cpu.mem[0] = 0x04;
         cpu.mem[1] = 1;
         cpu.ax = 0x3445;
