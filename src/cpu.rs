@@ -34,8 +34,8 @@ fn read_word(mem: &[u8], loc: usize) -> u16 {
 }
 
 fn write_word (mem: &mut [u8], loc: usize, val: u16) {
-    mem[loc] = (val & 0x00FF) as u8;
-    mem[loc+1] = ((val & 0xFF00) >> 8) as u8;
+    mem[loc] = val.get_low();
+    mem[loc+1] = val.get_high();
 }
 
 fn calc_word_sign_bit(val: u16) -> bool {
