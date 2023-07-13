@@ -14,11 +14,10 @@ fn main() -> io::Result<()> {
     } 
 
     let mut f = File::open(&args[1])?;
-    let mut buffer = [0; 65536];
+    let mut buffer: Vec<u8> = vec![0; 65535]; // can accept mem size as argument
     f.read(&mut buffer)?;
 
-    let mut cpu = CPU::new(true);
-    cpu.load_into_memory(&buffer);
+    let mut cpu = CPU::new(true, buffer.into_boxed_slice());
     cpu.emulate();
     Ok(())
 }
