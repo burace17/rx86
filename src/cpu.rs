@@ -471,15 +471,15 @@ ip: 0x{:X}",
             let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
 
             if word_inst && !imm_byte {
-                let imm = read_word(&mut self.mem, ip + 2);
-                let mut rm = read_word(&mut self.mem, address as usize);
+                let imm = read_word(&self.mem, ip + 2);
+                let mut rm = read_word(&self.mem, address as usize);
                 word_op(&mut rm, imm, &mut self.flag);
                 write_word(&mut self.mem, address as usize, rm);
             }
             if word_inst && imm_byte {
                 let imm_byte = self.mem[ip + 2] as i8;
                 let imm = imm_byte as i16;
-                let mut rm = read_word(&mut self.mem, address as usize);
+                let mut rm = read_word(&self.mem, address as usize);
                 word_op(&mut rm, imm as u16, &mut self.flag);
                 write_word(&mut self.mem, address as usize, rm);
                 // TODO check ip increment for this case..
@@ -494,7 +494,7 @@ ip: 0x{:X}",
             // R/M is a register
 
             if word_inst && !imm_byte {
-                let imm = read_word(&mut self.mem, ip + 2);
+                let imm = read_word(&self.mem, ip + 2);
                 let mut rm = self.get_reg_word_code(id_rm);
                 word_op(&mut rm, imm, &mut self.flag);
                 self.set_reg_word_code(id_rm, rm);
@@ -564,6 +564,23 @@ ip: 0x{:X}",
         F: Fn(u16, &[u8], &mut u16, &mut u16),
     {
         op(self.ip, &mut self.mem, &mut self.ax, &mut self.flag);
+        2
+    }
+
+    fn do_sp_inst<F>(&mut self, op: F) -> u16
+    where
+        F: Fn(&mut [u8], &mut u16),
+    {
+        op(&mut self.mem, &mut self.sp);
+        1
+    }
+
+    // I don't know what to call this
+    fn do_ip_inst<F>(&mut self, op: F) -> u16
+    where
+        F: Fn(&[u8], &mut u16, u16),
+    {
+        op(&self.mem, &mut self.ip, self.flag);
         2
     }
 
@@ -912,13 +929,12 @@ ip: 0x{:X}",
             0x51 => push_reg(&mut self.mem, &mut self.sp, self.cx),
             0x52 => push_reg(&mut self.mem, &mut self.sp, self.dx),
             0x53 => push_reg(&mut self.mem, &mut self.sp, self.bx),
-            0x54 => (|mem: &mut [u8], sp: &mut u16| {
+            0x54 => self.do_sp_inst(|mem: &mut [u8], sp: &mut u16| {
                 // handle SP as a special case to make borrow checker happy
                 // TODO: 286 handles this differently..
                 *sp -= 2;
                 write_word(mem, *sp as usize, *sp);
-                1
-            })(&mut self.mem, &mut self.sp),
+            }),
             0x55 => push_reg(&mut self.mem, &mut self.sp, self.bp),
             0x56 => push_reg(&mut self.mem, &mut self.sp, self.si),
             0x57 => push_reg(&mut self.mem, &mut self.sp, self.di),
@@ -926,73 +942,65 @@ ip: 0x{:X}",
             0x59 => pop_reg(&self.mem, &mut self.sp, &mut self.cx),
             0x5A => pop_reg(&self.mem, &mut self.sp, &mut self.dx),
             0x5B => pop_reg(&self.mem, &mut self.sp, &mut self.bx),
-            0x5C => (|mem: &mut [u8], sp: &mut u16| {
+            0x5C => self.do_sp_inst(|mem: &mut [u8], sp: &mut u16| {
                 // handle SP as a special case to make borrow checker happy
                 // TODO: 286 handles this differently..
                 *sp = read_word(mem, *sp as usize);
                 *sp += 2;
-                1
-            })(&mut self.mem, &mut self.sp),
+            }),
             0x5D => pop_reg(&self.mem, &mut self.sp, &mut self.bp),
             0x5E => pop_reg(&self.mem, &mut self.sp, &mut self.si),
             0x5F => pop_reg(&self.mem, &mut self.sp, &mut self.di),
             // TODO this can be generalized a bit...
-            0x72 => (|mem: &[u8], ip: &mut u16, flag: u16| {
+            0x72 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
                 if flag.get_bit(CARRY_FLAG) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
-                2
-            })(&self.mem, &mut self.ip, self.flag),
-            0x74 => (|mem: &[u8], ip: &mut u16, flag: u16| {
+            }),
+            0x74 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
                 if flag.get_bit(ZERO_FLAG) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
-                2
-            })(&self.mem, &mut self.ip, self.flag),
-            0x75 => (|mem: &[u8], ip: &mut u16, flag: u16| {
+            }),
+            0x75 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
                 if !flag.get_bit(ZERO_FLAG) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
-                2
-            })(&self.mem, &mut self.ip, self.flag),
-            0x76 => (|mem: &[u8], ip: &mut u16, flag: u16| {
+            }),
+            0x76 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
                 if flag.get_bit(CARRY_FLAG) || flag.get_bit(ZERO_FLAG) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
-                2
-            })(&self.mem, &mut self.ip, self.flag),
-            0x77 => (|mem: &[u8], ip: &mut u16, flag: u16| {
+            }),
+            0x77 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
                 if !flag.get_bit(CARRY_FLAG) && !flag.get_bit(ZERO_FLAG) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
-                2
-            })(&self.mem, &mut self.ip, self.flag),
-            0x78 => (|mem: &[u8], ip: &mut u16, flag: u16| {
+            }),
+            0x78 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
                 if flag.get_bit(SIGN_FLAG) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
-                2
-            })(&self.mem, &mut self.ip, self.flag),
-            0x79 => (|mem: &[u8], ip: &mut u16, flag: u16| {
+            }),
+            0x79 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
                 if !flag.get_bit(SIGN_FLAG) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
-                2
-            })(&self.mem, &mut self.ip, self.flag),
+            }),
             0x80 => self.do_opext_inst(false, false),
             0x81 => self.do_opext_inst(true, false),
             0x82 => self.do_opext_inst(false, false),
