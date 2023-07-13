@@ -39,13 +39,11 @@ fn write_word (mem: &mut [u8], loc: usize, val: u16) {
 }
 
 fn calc_word_sign_bit(val: u16) -> bool {
-    let new_sign = (val & 0x8000) >> 7; // TODO I think this bit shift is unneeded
-    return new_sign != 0;
+    (val as i16) < 0
 }
 
 fn calc_byte_sign_bit(val: u8) -> bool {
-    let new_sign = (val & 0x80) >> 7; // TODO I think this bit shift is unneeded
-    return new_sign != 0;
+    (val as i8) < 0
 }
 
 fn calc_word_carry_bit(a: u16, b: u16) -> bool {
@@ -1109,12 +1107,7 @@ impl Bits for u16 {
 #[cfg(test)]
 mod tests {
     use crate::CPU;
-    use crate::cpu::Bits;
-    use crate::cpu::read_word;
-    use crate::cpu::write_word;
-    use crate::cpu::ZERO_FLAG;
-    use crate::cpu::CARRY_FLAG;
-    use crate::cpu::SIGN_FLAG;
+    use crate::cpu::*;
     
     const TEST_MEM_SIZE: usize = 65535;
 
@@ -1266,5 +1259,25 @@ mod tests {
         assert_eq!(mem[0x46], 0x10);
         assert_eq!(mem[0x47], 0x12);
         assert_eq!(read_word(&mem, 0x45), 0x1014);
+    }
+    
+    #[test]
+    fn calc_word_sign_bit_test() {
+        assert_eq!(calc_word_sign_bit(0xFFFF), true);
+        assert_eq!(calc_word_sign_bit(0x0000), false);
+        assert_eq!(calc_word_sign_bit(0x8000), true);
+        assert_eq!(calc_word_sign_bit(0x1000), false);
+        assert_eq!(calc_word_sign_bit(0x0001), false);
+        assert_eq!(calc_word_sign_bit(0x0008), false);
+        assert_eq!(calc_word_sign_bit(0x0080), false);
+        assert_eq!(calc_word_sign_bit(0x0800), false);
+    }
+    
+    #[test]
+    fn calc_byte_sign_bit_test() {
+        assert_eq!(calc_byte_sign_bit(0x01), false);
+        assert_eq!(calc_byte_sign_bit(0x08), false);
+        assert_eq!(calc_byte_sign_bit(0x80), true);
+        assert_eq!(calc_byte_sign_bit(0x10), false);
     }
 }
