@@ -10,7 +10,7 @@ static SIGN_FLAG: u16 = 7;
 // static DIRECTION_FLAG: u16 = 10;
 // static OVERFLOW_FLAG: u16 = 11;
 
-pub struct CPU {
+pub struct Cpu {
     // Registers
     ax: u16,
     bx: u16,
@@ -125,9 +125,9 @@ fn mov_reg_imm_byte(reg: &mut u16, imm: u8, high: bool) -> u16 {
     2
 }
 
-impl CPU {
-    pub fn new(debug: bool, mem: Box<[u8]>) -> CPU {
-        CPU {
+impl Cpu {
+    pub fn new(debug: bool, mem: Box<[u8]>) -> Cpu {
+        Cpu {
             ax: 0,
             bx: 0,
             cx: 0,
@@ -144,8 +144,8 @@ impl CPU {
     }
 
     #[allow(unused)]
-    pub fn new_with_mem_size(debug: bool, mem_size: usize) -> CPU {
-        CPU::new(debug, vec![0; mem_size].into_boxed_slice())
+    pub fn new_with_mem_size(debug: bool, mem_size: usize) -> Cpu {
+        Cpu::new(debug, vec![0; mem_size].into_boxed_slice())
     }
 
     pub fn emulate(&mut self) {
@@ -1117,13 +1117,13 @@ impl Bits for u16 {
 #[cfg(test)]
 mod tests {
     use crate::cpu::*;
-    use crate::CPU;
+    use crate::Cpu;
 
     const TEST_MEM_SIZE: usize = 65535;
 
     #[test]
     fn cpu_sanity() {
-        let mut cpu = CPU::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.ax = 69;
         cpu.cx = 42;
         cpu.dx = 1;
@@ -1185,7 +1185,7 @@ mod tests {
 
     #[test]
     fn cpu_byte_sanity() {
-        let mut cpu = CPU::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.ax = 27;
         cpu.mem[0] = 0x00;
         cpu.mem[1] = 0x06;
@@ -1197,7 +1197,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
 
-        cpu = CPU::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.cx = 245;
         cpu.mem[0] = 0x00;
         cpu.mem[1] = 0x0E;
@@ -1209,7 +1209,7 @@ mod tests {
         assert!(cpu.flag.get_bit(CARRY_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
 
-        cpu = CPU::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.bx = 125;
         cpu.mem[0] = 0x00;
         cpu.mem[1] = 0x1E;
@@ -1221,7 +1221,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
         assert!(cpu.flag.get_bit(SIGN_FLAG));
 
-        cpu = CPU::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.mem[0] = 0x04;
         cpu.mem[1] = 1;
         cpu.ax = 0x3445;

@@ -1,5 +1,5 @@
 mod cpu;
-use cpu::CPU;
+use cpu::Cpu;
 
 use std::env;
 
@@ -14,7 +14,7 @@ fn main() -> std::io::Result<()> {
     // accept mem size as argument and verify specified memory is larger than input program size
     buffer.resize(65535, 0);
 
-    let mut cpu = CPU::new(true, buffer.into_boxed_slice());
+    let mut cpu = Cpu::new(true, buffer.into_boxed_slice());
     cpu.emulate();
     Ok(())
 }
