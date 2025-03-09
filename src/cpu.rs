@@ -581,7 +581,7 @@ ip: 0x{:X}",
                 ip_increment + 1
                 // TODO check ip increment for this case..
             } else {
-                let imm = self.mem[ip + 2];
+                let imm = self.mem[ip + 4];
                 let mut rm = self.mem[address as usize];
                 byte_op(&mut rm, imm, &mut self.flag);
                 self.mem[address as usize] = rm;
@@ -1786,6 +1786,96 @@ mod tests {
     }
 
     // Instruction tests
+
+    #[test]
+    fn test_82_add_positive() {
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        // Instruction: ADD BYTE [0x1234], 0x01
+        cpu.mem[0..5].copy_from_slice(&[0x82, 0x06, 0x34, 0x12, 0x01]);
+        cpu.mem[0x1234] = 0x01;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.mem[0x1234], 0x02);
+        assert_eq!(cpu.ip, 5);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    #[test]
+    fn test_82_add_overflow() {
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        // Instruction: ADD BYTE [0x1234], 0x01
+        cpu.mem[0..5].copy_from_slice(&[0x82, 0x06, 0x34, 0x12, 0x01]);
+        cpu.mem[0x1234] = 0xFF;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.mem[0x1234], 0x00);
+        assert_eq!(cpu.ip, 5);
+        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    #[test]
+    fn test_82_add_negative() {
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        // Instruction: ADD BYTE [0x1234], 0x01
+        cpu.mem[0..5].copy_from_slice(&[0x82, 0x06, 0x34, 0x12, 0x01]);
+        cpu.mem[0x1234] = 0x7F; // 127 + 1 = 128 (0x80, signed -128)
+        cpu.do_cycle();
+
+        assert_eq!(cpu.mem[0x1234], 0x80);
+        assert_eq!(cpu.ip, 5);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    #[test]
+    fn test_82_sub_borrow() {
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        // Instruction: SUB BYTE [0x1234], 0xFF (subtract 255)
+        cpu.mem[0..5].copy_from_slice(&[0x82, 0x2E, 0x34, 0x12, 0xFF]);
+        cpu.mem[0x1234] = 0x05;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.mem[0x1234], 0x06); // 5 - (-1) = 6 (overflow in signed)
+        assert_eq!(cpu.ip, 5);
+        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    #[test]
+    fn test_82_cmp_signed() {
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        // Instruction: CMP BYTE [0x1234], 0x80 (compare 127 vs -128)
+        cpu.mem[0..5].copy_from_slice(&[0x82, 0x3E, 0x34, 0x12, 0x80]);
+        cpu.mem[0x1234] = 0x7F; // 127
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ip, 5);
+        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    #[test]
+    fn test_82_add_max_positive() {
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        // Instruction: ADD BYTE [0x1234], 0x7F (127)
+        cpu.mem[0..5].copy_from_slice(&[0x82, 0x06, 0x34, 0x12, 0x7F]);
+        cpu.mem[0x1234] = 0x01;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.mem[0x1234], 0x80); // 1 + 127 = 128 (signed -128)
+        assert_eq!(cpu.ip, 5);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(cpu.flag.get_bit(SIGN_FLAG));
+    }
+
     #[test]
     fn test_83_add_positive() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
