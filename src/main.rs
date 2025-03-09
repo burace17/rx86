@@ -16,6 +16,9 @@ fn main() -> std::io::Result<()> {
     buffer.resize(65535, 0);
 
     let mut cpu = Cpu::new(true, buffer.into_boxed_slice());
+    //cpu.step_mode = true;
+    //cpu.breakpoints.push(0x174);
+    //cpu.breakpoints.push(0xA9);
     cpu.emulate();
     Ok(())
 }

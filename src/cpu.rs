@@ -1,4 +1,5 @@
 use crate::bits::Bits;
+use std::io;
 use std::mem;
 use std::process;
 static CARRY_FLAG: u16 = 0;
@@ -26,6 +27,9 @@ pub struct Cpu {
     flag: u16,
     mem: Box<[u8]>,
     debug: bool,
+    
+    pub breakpoints: Vec<u16>,
+    pub step_mode: bool,
 }
 
 fn read_word(mem: &[u8], loc: usize) -> u16 {
@@ -174,6 +178,8 @@ impl Cpu {
             flag: 0,
             mem,
             debug,
+            breakpoints: Vec::new(),
+            step_mode: false,
         }
     }
 
@@ -216,7 +222,7 @@ ip: 0x{:X}",
 
     pub fn dump_video_ram(&self) {
         let mut j = 0;
-        for i in 0x8000..0xA000 {
+        for i in 0x8000..0x87D0 {
             let val = self.mem[i as usize];
             if val == 0 {
                 print!(" ");
@@ -225,11 +231,37 @@ ip: 0x{:X}",
                 print!("{}", c);
             }
 
-            if j == 25 {
+            if j == 80 {
                 println!();
                 j = 0;
             } else {
                 j += 1;
+            }
+        }
+    }
+    
+    fn handle_breakpoint(&mut self) {
+        println!("Stopped at: {:X}", self.ip);
+        self.dump_registers();
+        self.dump_video_ram();
+        println!();
+        loop {
+            let mut input = String::new();
+            if let Ok(_) = io::stdin().read_line(&mut input) {
+                match input.trim() {
+                    "g" => {
+                        self.step_mode = false;
+                        break
+                    },
+                    "n" => {
+                        self.step_mode = true;
+                        break
+                    },
+                    _ => println!("Unknown debug command. Type 'g' to continue"),
+                }
+            } else {
+                println!("Couldn't read from stdin");
+                break
             }
         }
     }
@@ -536,13 +568,13 @@ ip: 0x{:X}",
             let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
             //println!("ip increment: {:X}", ip_increment);
             if word_inst && !imm_byte {
-                let imm = read_word(&self.mem, ip + 2);
+                let imm = read_word(&self.mem, ip + 4);
                 let mut rm = read_word(&self.mem, address as usize);
                 word_op(&mut rm, imm, &mut self.flag);
                 write_word(&mut self.mem, address as usize, rm);
                 ip_increment + 2
             } else if word_inst && imm_byte {
-                let imm_byte = self.mem[ip + 2] as i8;
+                let imm_byte = self.mem[ip + 4] as i8;
                 let imm = imm_byte as i16;
                 let mut rm = read_word(&self.mem, address as usize);
                 word_op(&mut rm, imm as u16, &mut self.flag);
@@ -692,6 +724,10 @@ ip: 0x{:X}",
         let opcode = self.mem[self.ip as usize];
         //println!("opcode: 0x{:X}, ip: 0x{:X}", opcode, self.ip);
         //self.dump_registers();
+        if self.step_mode || self.breakpoints.contains(&self.ip) {
+            self.handle_breakpoint();
+        }
+
         let ip_increment = match opcode {
             0x00 => self.do_byte_inst(|rm, reg, flag| {
                 let old = *rm;
@@ -1508,6 +1544,18 @@ mod tests {
         assert!(cpu.flag.get_bit(CARRY_FLAG));
         assert!(cpu.flag.get_bit(SIGN_FLAG));
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
+
+        // add    WORD PTR ds:0x1d3,0x4c
+        // 83 06 d3 01 4c
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.mem[0] = 0x83;
+        cpu.mem[1] = 0x06;
+        cpu.mem[2] = 0xD3;
+        cpu.mem[3] = 0x01;
+        cpu.mem[4] = 0x4C;
+        cpu.do_cycle();
+        assert_eq!(cpu.mem[0x1D3], 0x4C);
+        assert_eq!(cpu.ip, 5);
     }
 
     #[test]
@@ -1560,6 +1608,18 @@ mod tests {
 
         // 81 3e d3 01 e0 01
         // cmp    WORD PTR ds:0x1d3,0x1e0
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        write_word(&mut cpu.mem, 0x01D3, 0x01E0);
+        cpu.mem[0] = 0x81;
+        cpu.mem[1] = 0x3E;
+        cpu.mem[2] = 0xD3;
+        cpu.mem[3] = 0x01;
+        cpu.mem[4] = 0xE0;
+        cpu.mem[5] = 0x01;
+        cpu.do_cycle();
+        assert_eq!(read_word(&cpu.mem, 0x01D3), 0x01E0);
+        assert_eq!(cpu.ip, 0x06);
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
     }
 
     #[test]
