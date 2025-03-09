@@ -75,19 +75,19 @@ Disassembly of section .data:
   98:	b0 23                	mov    al,0x23
   9a:	c7 06 d3 01 90 01    	mov    WORD PTR ds:0x1d3,0x190
   a0:	b1 50                	mov    cl,0x50
-  a2:	e8 c4 00             	call   0x169
+  a2:	e8 c4 00             	call   0x169 ; print!
   a5:	fe c9                	dec    cl
   a7:	75 f9                	jne    0xa2
   a9:	81 3e d3 01 e0 01    	cmp    WORD PTR ds:0x1d3,0x1e0
   af:	75 0a                	jne    0xbb
   b1:	b1 50                	mov    cl,0x50
-  b3:	c7 06 d3 01 80 07    	mov    WORD PTR ds:0x1d3,0x780
+  b3:	c7 06 d3 01 80 07    	mov    WORD PTR ds:0x1d3,0x780 ; suspicious
   b9:	eb e7                	jmp    0xa2
-  bb:	c7 06 d3 01 e0 01    	mov    WORD PTR ds:0x1d3,0x1e0
+  bb:	c7 06 d3 01 e0 01    	mov    WORD PTR ds:0x1d3,0x1e0 ; suspicious
   c1:	b1 12                	mov    cl,0x12
   c3:	e8 a3 00             	call   0x169
   c6:	e8 a0 00             	call   0x169
-  c9:	83 06 d3 01 4c       	add    WORD PTR ds:0x1d3,0x4c
+  c9:	83 06 d3 01 4c       	add    WORD PTR ds:0x1d3,0x4c ; suspicious
   ce:	e8 98 00             	call   0x169
   d1:	e8 95 00             	call   0x169
   d4:	fe c9                	dec    cl
