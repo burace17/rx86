@@ -1,3 +1,4 @@
+mod bits;
 mod cpu;
 use cpu::Cpu;
 

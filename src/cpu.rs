@@ -1,3 +1,4 @@
+use crate::bits::Bits;
 use std::mem;
 use std::process;
 static CARRY_FLAG: u16 = 0;
@@ -1084,42 +1085,6 @@ ip: 0x{:X}",
     }
 }
 
-trait Bits {
-    fn get_low(&self) -> u8;
-    fn get_high(&self) -> u8;
-    fn set_low(&mut self, value: u8);
-    fn set_high(&mut self, value: u8);
-    fn get_bit(&self, n: u16) -> bool;
-    fn set_bit(&mut self, n: u16, val: bool);
-}
-
-impl Bits for u16 {
-    fn get_low(&self) -> u8 {
-        (self & 0x00FF) as u8
-    }
-    fn get_high(&self) -> u8 {
-        ((self & 0xFF00) >> 8) as u8
-    }
-    fn set_low(&mut self, value: u8) {
-        *self &= !0 << 8;
-        *self |= value as u16;
-    }
-    fn set_high(&mut self, value: u8) {
-        *self &= !0 >> 8;
-        *self |= (value as u16) << 8;
-    }
-    fn get_bit(&self, n: u16) -> bool {
-        ((1 << n) & self) != 0
-    }
-    fn set_bit(&mut self, n: u16, val: bool) {
-        if val {
-            *self |= 1 << n;
-        } else {
-            *self &= !(1 << n);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::cpu::*;
@@ -1213,7 +1178,7 @@ mod tests {
         assert_eq!(cpu.bx, 0x5678);
         assert_eq!(cpu.ip, 0x02);
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        
+
         // MOV [BX+SI+0x1234], AX
         cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.ax = 0xA55A;
@@ -1303,7 +1268,7 @@ mod tests {
         assert_eq!(cpu.ip, 0x03);
         */
     }
-    
+
     #[test]
     fn cpu_stack_sanity() {
         // PUSH AX
@@ -1324,7 +1289,7 @@ mod tests {
         assert_eq!(cpu.sp, 0x0100);
         assert_eq!(cpu.ip, 0x02);
     }
-    
+
     #[test]
     fn cpu_xchg_sanity() {
         // XCHG AX, BX
@@ -1338,7 +1303,7 @@ mod tests {
         assert_eq!(cpu.bx, 0x1234);
         assert_eq!(cpu.ip, 0x02);
     }
-    
+
     #[test]
     fn cpu_arithmetic_sanity() {
         // ADD AX, BX
@@ -1353,7 +1318,7 @@ mod tests {
         assert!(cpu.flag.get_bit(CARRY_FLAG));
         assert!(cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
-        
+
         // STC
         // ADC AX, BX
         cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
@@ -1381,7 +1346,7 @@ mod tests {
         assert!(cpu.flag.get_bit(SIGN_FLAG));
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
     }
-    
+
     #[test]
     fn cpu_logical_op_sanity() {
         // AND AX, BX
@@ -1457,7 +1422,7 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(cpu.ip, 0x0004);
     }
-    
+
     #[test]
     fn cpu_subroutine_sanity() {
         // CALL 0x0005
@@ -1475,7 +1440,7 @@ mod tests {
         assert_eq!(cpu.sp, 0x0100);
         assert_eq!(cpu.ip, 0x0003);
     }
-    
+
     #[test]
     fn cpu_flag_sanity() {
         // STC
@@ -1487,31 +1452,6 @@ mod tests {
         assert!(cpu.flag.get_bit(CARRY_FLAG));
         cpu.do_cycle();
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
-    }
-
-    #[test]
-    fn traits_test() {
-        let mut test: u16 = 0x41F4;
-        assert_eq!(test.get_low(), 0xF4);
-        assert_eq!(test.get_high(), 0x41);
-        test.set_low(0xEF);
-        assert_eq!(test, 0x41EF);
-        test.set_high(0xBE);
-        assert_eq!(test, 0xBEEF);
-        assert_eq!(test.get_low(), 0xEF);
-        assert_eq!(test.get_high(), 0xBE);
-
-        test = 0b0101;
-        assert!(test.get_bit(0));
-        assert!(!test.get_bit(1));
-        assert!(test.get_bit(2));
-
-        test.set_bit(0, false);
-        assert_eq!(test, 4);
-        assert!(!test.get_bit(0));
-        test.set_bit(2, false);
-        assert_eq!(test, 0);
-        assert!(!test.get_bit(2));
     }
 
     #[test]
