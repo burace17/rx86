@@ -90,13 +90,17 @@ fn calc_sub_byte_flags(flags: &mut u16, left: u8, right: u8, result: u8) {
     flags.set_bit(ZERO_FLAG, result == 0);
 }
 
-fn inc_reg(reg: &mut u16) -> u16 {
+fn inc_reg(reg: &mut u16, flags: &mut u16) -> u16 {
     *reg = (*reg).wrapping_add(1);
+    flags.set_bit(ZERO_FLAG, *reg == 0);
+    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(*reg));
     1
 }
 
-fn dec_reg(reg: &mut u16) -> u16 {
+fn dec_reg(reg: &mut u16, flags: &mut u16) -> u16 {
     *reg = (*reg).wrapping_sub(1);
+    flags.set_bit(ZERO_FLAG, *reg == 0);
+    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(*reg));
     1
 }
 
@@ -278,11 +282,12 @@ ip: 0x{:X}",
             0x04 => self.si,
             0x05 => self.di,
             0x06 if id_mod == 0 => read_word(&self.mem, ip + 2),
-            0x06 if id_mod > 0 => self.bp,
+            0x06 => self.bp,
             0x07 => self.bx,
             _ => self.cpu_panic("do_word_inst: failed to parse R/M bits of mod R/M"),
         };
 
+        // bp uses 16 bit displacement
         if id_rm == 0x06 && id_mod == 0 {
             ip_increment = 4;
         }
@@ -909,22 +914,22 @@ ip: 0x{:X}",
                 let val = *ax - imm; // TODO wrapping
                 calc_sub_word_flags(flag, *ax, imm, val);
             }),
-            0x40 => inc_reg(&mut self.ax), // TODO set flags...
-            0x41 => inc_reg(&mut self.cx),
-            0x42 => inc_reg(&mut self.dx),
-            0x43 => inc_reg(&mut self.bx),
-            0x44 => inc_reg(&mut self.sp),
-            0x45 => inc_reg(&mut self.bp),
-            0x46 => inc_reg(&mut self.si),
-            0x47 => inc_reg(&mut self.di),
-            0x48 => dec_reg(&mut self.ax),
-            0x49 => dec_reg(&mut self.cx),
-            0x4A => dec_reg(&mut self.dx),
-            0x4B => dec_reg(&mut self.bx),
-            0x4C => dec_reg(&mut self.sp),
-            0x4D => dec_reg(&mut self.bp),
-            0x4E => dec_reg(&mut self.si),
-            0x4F => dec_reg(&mut self.di),
+            0x40 => inc_reg(&mut self.ax, &mut self.flag),
+            0x41 => inc_reg(&mut self.cx, &mut self.flag),
+            0x42 => inc_reg(&mut self.dx, &mut self.flag),
+            0x43 => inc_reg(&mut self.bx, &mut self.flag),
+            0x44 => inc_reg(&mut self.sp, &mut self.flag),
+            0x45 => inc_reg(&mut self.bp, &mut self.flag),
+            0x46 => inc_reg(&mut self.si, &mut self.flag),
+            0x47 => inc_reg(&mut self.di, &mut self.flag),
+            0x48 => dec_reg(&mut self.ax, &mut self.flag),
+            0x49 => dec_reg(&mut self.cx, &mut self.flag),
+            0x4A => dec_reg(&mut self.dx, &mut self.flag),
+            0x4B => dec_reg(&mut self.bx, &mut self.flag),
+            0x4C => dec_reg(&mut self.sp, &mut self.flag),
+            0x4D => dec_reg(&mut self.bp, &mut self.flag),
+            0x4E => dec_reg(&mut self.si, &mut self.flag),
+            0x4F => dec_reg(&mut self.di, &mut self.flag),
             0x50 => push_reg(&mut self.mem, &mut self.sp, self.ax),
             0x51 => push_reg(&mut self.mem, &mut self.sp, self.cx),
             0x52 => push_reg(&mut self.mem, &mut self.sp, self.dx),
@@ -1041,15 +1046,16 @@ ip: 0x{:X}",
             0xBE => mov_reg_imm_word(&mut self.si, read_word(&self.mem, (self.ip + 1) as usize)),
             0xBF => mov_reg_imm_word(&mut self.di, read_word(&self.mem, (self.ip + 1) as usize)),
             0xC3 => (|mem, ip: &mut u16, sp: &mut u16| {
-                *ip = read_word(mem, *sp as usize);
-                *sp += 2;
+                // RET
+                pop_reg(mem, sp, ip);
                 0
             })(&self.mem, &mut self.ip, &mut self.sp),
             0xE8 => (|mem: &mut [u8], ip: &mut u16, sp: &mut u16| {
-                *sp -= 2;
-                let old = *ip;
-                write_word(mem, *sp as usize, old + 3);
-                *ip += read_word(mem, (old as usize) + 1);
+                // CALL
+                let return_address = *ip + 3; // next instruction after this one (3 bytes after)
+                push_reg(mem, sp, return_address);
+                // add the displacement to IP
+                *ip += read_word(mem, (*ip as usize) + 1);
                 3
             })(&mut self.mem, &mut self.ip, &mut self.sp),
             0xE9 => (|mem, ip: &mut u16| {
@@ -1123,7 +1129,20 @@ mod tests {
 
     #[test]
     fn cpu_sanity() {
+        // NOP
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.mem[0] = 0x90;
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 1);
+        assert_eq!(cpu.ax, 0);
+        assert_eq!(cpu.bx, 0);
+        assert_eq!(cpu.cx, 0);
+        assert_eq!(cpu.dx, 0);
+        assert_eq!(cpu.bp, 0);
+        assert_eq!(cpu.sp, 0x0100);
+        assert_eq!(cpu.flag, 0);
+
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.ax = 69;
         cpu.cx = 42;
         cpu.dx = 1;
@@ -1181,6 +1200,36 @@ mod tests {
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(cpu.flag.get_bit(CARRY_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
+
+        // ADD AX, BX
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x1234;
+        cpu.bx = 0x5678;
+        cpu.flag.set_bit(CARRY_FLAG, true);
+        cpu.mem[0] = 0x03;
+        cpu.mem[1] = 0xc3;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x68AC);
+        assert_eq!(cpu.bx, 0x5678);
+        assert_eq!(cpu.ip, 0x02);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        
+        // MOV [BX+SI+0x1234], AX
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0xA55A;
+        cpu.bx = 0x1000;
+        cpu.si = 0x2000;
+        cpu.mem[0x4234] = 0;
+        cpu.mem[0] = 0x89;
+        cpu.mem[1] = 0x80;
+        cpu.mem[2] = 0x34;
+        cpu.mem[3] = 0x12;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0xA55A);
+        assert_eq!(cpu.bx, 0x1000);
+        assert_eq!(cpu.si, 0x2000);
+        assert_eq!(cpu.ip, 0x04);
+        assert_eq!(read_word(&cpu.mem, 0x4234), 0xA55A);
     }
 
     #[test]
@@ -1227,6 +1276,217 @@ mod tests {
         cpu.ax = 0x3445;
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0x3446);
+    }
+
+    #[test]
+    fn cpu_mov_sanity() {
+        // MOV AX, 0x1234
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.mem[0] = 0xB8;
+        cpu.mem[1] = 0x34;
+        cpu.mem[2] = 0x12;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x1234);
+        assert_eq!(cpu.ip, 0x03);
+
+        // MOV [0x1234], AX
+        // A3 not implemented yet
+        /*
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x5678;
+        cpu.mem[0] = 0xA3;
+        cpu.mem[1] = 0x34;
+        cpu.mem[2] = 0x12;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x5678);
+        assert_eq!(read_word(&cpu.mem, 0x1234), 0x5678);
+        assert_eq!(cpu.ip, 0x03);
+        */
+    }
+    
+    #[test]
+    fn cpu_stack_sanity() {
+        // PUSH AX
+        // POP BX
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x1234;
+        cpu.sp = 0x0100;
+        cpu.mem[0] = 0x50;
+        cpu.mem[1] = 0x5B;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x1234);
+        assert_eq!(cpu.bx, 0);
+        assert_eq!(cpu.sp, 0x0100 - 2);
+        assert_eq!(cpu.ip, 0x01);
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x1234);
+        assert_eq!(cpu.bx, 0x1234);
+        assert_eq!(cpu.sp, 0x0100);
+        assert_eq!(cpu.ip, 0x02);
+    }
+    
+    #[test]
+    fn cpu_xchg_sanity() {
+        // XCHG AX, BX
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x1234;
+        cpu.bx = 0x5678;
+        cpu.mem[0] = 0x87;
+        cpu.mem[1] = 0xC3;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x5678);
+        assert_eq!(cpu.bx, 0x1234);
+        assert_eq!(cpu.ip, 0x02);
+    }
+    
+    #[test]
+    fn cpu_arithmetic_sanity() {
+        // ADD AX, BX
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0xFFFF;
+        cpu.bx = 0x0001;
+        cpu.mem[0] = 0x01;
+        cpu.mem[1] = 0xD8;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0);
+        assert_eq!(cpu.ip, 2);
+        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        
+        // STC
+        // ADC AX, BX
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x0001;
+        cpu.bx = 0x0001;
+        cpu.mem[0] = 0xF9;
+        cpu.mem[1] = 0x11;
+        cpu.mem[2] = 0xD8;
+        cpu.do_cycle();
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x0003);
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+
+        // SUB AX, BX
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x0001;
+        cpu.bx = 0x0002;
+        cpu.mem[0] = 0x29;
+        cpu.mem[1] = 0xD8;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0xFFFF);
+        assert_eq!(cpu.ip, 2);
+        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+    }
+    
+    #[test]
+    fn cpu_logical_op_sanity() {
+        // AND AX, BX
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0xFF00;
+        cpu.bx = 0x00FF;
+        cpu.mem[0] = 0x21;
+        cpu.mem[1] = 0xD8;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x0000);
+        assert_eq!(cpu.bx, 0x00FF);
+        assert_eq!(cpu.ip, 2);
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+
+        // XOR AX, BX
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x1234;
+        cpu.bx = 0x1234;
+        cpu.mem[0] = 0x31;
+        cpu.mem[1] = 0xD8;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x0000);
+        assert_eq!(cpu.bx, 0x1234);
+        assert_eq!(cpu.ip, 2);
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+    }
+
+    #[test]
+    fn cpu_inc_dec_sanity() {
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0xFFFF;
+        cpu.mem[0] = 0x40;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x0000);
+        assert_eq!(cpu.ip, 1);
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x00001;
+        cpu.mem[0] = 0x48;
+        cpu.do_cycle();
+        assert_eq!(cpu.ax, 0x0000);
+        assert_eq!(cpu.ip, 1);
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    #[test]
+    fn cpu_jmp_sanity() {
+        // CMP AX, BX
+        // JZ +2
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x1234;
+        cpu.bx = 0x1234;
+        cpu.mem[0] = 0x3B;
+        cpu.mem[1] = 0xC3;
+        cpu.mem[2] = 0x74;
+        cpu.mem[3] = 0x02;
+        cpu.do_cycle();
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x0006);
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+
+        // JMP +2
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.mem[0] = 0xEB;
+        cpu.mem[1] = 0x02;
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x0004);
+    }
+    
+    #[test]
+    fn cpu_subroutine_sanity() {
+        // CALL 0x0005
+        // RET
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.sp = 0x0100;
+        cpu.mem[0] = 0xE8;
+        cpu.mem[1] = 0x02;
+        cpu.mem[2] = 0x00;
+        cpu.mem[0x0005] = 0xC3;
+        cpu.do_cycle();
+        assert_eq!(cpu.sp, 0x00FE);
+        assert_eq!(cpu.ip, 0x0005);
+        cpu.do_cycle();
+        assert_eq!(cpu.sp, 0x0100);
+        assert_eq!(cpu.ip, 0x0003);
+    }
+    
+    #[test]
+    fn cpu_flag_sanity() {
+        // STC
+        // CLC
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.mem[0] = 0xF9;
+        cpu.mem[1] = 0xF8;
+        cpu.do_cycle();
+        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        cpu.do_cycle();
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
     }
 
     #[test]
