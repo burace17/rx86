@@ -131,6 +131,11 @@ fn pop_reg(mem: &[u8], sp: &mut u16, reg: &mut u16) -> u16 {
     1
 }
 
+fn swap_reg(ax: &mut u16, xx: &mut u16) -> u16 {
+    mem::swap(ax, xx);
+    1
+}
+
 fn mov_reg_imm_word(reg: &mut u16, imm: u16) -> u16 {
     *reg = imm;
     3
@@ -201,7 +206,11 @@ ip: 0x{:X}",
     pub fn halt_cpu(&self) -> ! {
         println!("----------------------");
         println!("CPU halted");
+        println!("----------------------");
         self.dump_registers();
+        println!("----------------------");
+        println!();
+        self.dump_video_ram();
         process::exit(0);
     }
 
@@ -300,10 +309,10 @@ ip: 0x{:X}",
         let ip = self.ip as usize;
         let mut ip_increment = 2;
         let mut address = match id_rm {
-            0x00 => self.bx + self.si,
-            0x01 => self.bx + self.di,
-            0x02 => self.bp + self.si,
-            0x03 => self.bp + self.di,
+            0x00 => self.bx.wrapping_add(self.si),
+            0x01 => self.bx.wrapping_add(self.di),
+            0x02 => self.bp.wrapping_add(self.si),
+            0x03 => self.bp.wrapping_add(self.di),
             0x04 => self.si,
             0x05 => self.di,
             0x06 if id_mod == 0 => read_word(&self.mem, ip + 2),
@@ -336,7 +345,7 @@ ip: 0x{:X}",
     // TODO: It shouldn't be hard to generalize do_byte_inst to accomodate this use case too
     // Only difference is we don't map 'reg' to a register value. grp2 instructions have specific
     // uses for the 'reg' value.
-    fn do_grp2_inst<F>(&mut self, op: F) -> u16 
+    fn do_grp2_inst<F>(&mut self, op: F) -> u16
     where
         F: Fn(&mut u8, u8, &mut u16),
     {
@@ -525,27 +534,28 @@ ip: 0x{:X}",
         if id_mod < 0x03 {
             // R/M is memory.
             let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
-
+            //println!("ip increment: {:X}", ip_increment);
             if word_inst && !imm_byte {
                 let imm = read_word(&self.mem, ip + 2);
                 let mut rm = read_word(&self.mem, address as usize);
                 word_op(&mut rm, imm, &mut self.flag);
                 write_word(&mut self.mem, address as usize, rm);
-            }
-            if word_inst && imm_byte {
+                ip_increment + 2
+            } else if word_inst && imm_byte {
                 let imm_byte = self.mem[ip + 2] as i8;
                 let imm = imm_byte as i16;
                 let mut rm = read_word(&self.mem, address as usize);
                 word_op(&mut rm, imm as u16, &mut self.flag);
                 write_word(&mut self.mem, address as usize, rm);
+                ip_increment + 1
                 // TODO check ip increment for this case..
             } else {
                 let imm = self.mem[ip + 2];
                 let mut rm = self.mem[address as usize];
                 byte_op(&mut rm, imm, &mut self.flag);
                 self.mem[address as usize] = rm;
+                ip_increment + 1
             }
-            ip_increment
         } else {
             // R/M is a register
 
@@ -610,7 +620,7 @@ ip: 0x{:X}",
     }
 
     // TODO: again another function that should be possible to generalize
-    fn do_rm_imm_word_inst<F>(&mut self, op: F) -> u16 
+    fn do_rm_imm_word_inst<F>(&mut self, op: F) -> u16
     where
         F: Fn(&mut u16, u16, &mut u16),
     {
@@ -680,6 +690,8 @@ ip: 0x{:X}",
 
     pub fn do_cycle(&mut self) {
         let opcode = self.mem[self.ip as usize];
+        //println!("opcode: 0x{:X}, ip: 0x{:X}", opcode, self.ip);
+        //self.dump_registers();
         let ip_increment = match opcode {
             0x00 => self.do_byte_inst(|rm, reg, flag| {
                 let old = *rm;
@@ -1118,6 +1130,13 @@ ip: 0x{:X}",
                 *reg = *rm;
             }),
             0x90 => 1,
+            0x91 => swap_reg(&mut self.ax, &mut self.cx),
+            0x92 => swap_reg(&mut self.ax, &mut self.cx),
+            0x93 => swap_reg(&mut self.ax, &mut self.bx),
+            0x94 => swap_reg(&mut self.ax, &mut self.sp),
+            0x95 => swap_reg(&mut self.ax, &mut self.bp),
+            0x96 => swap_reg(&mut self.ax, &mut self.si),
+            0x97 => swap_reg(&mut self.ax, &mut self.di),
             0xB0 => mov_reg_imm_byte(&mut self.ax, self.mem[(self.ip + 1) as usize], false),
             0xB1 => mov_reg_imm_byte(&mut self.cx, self.mem[(self.ip + 1) as usize], false),
             0xB2 => mov_reg_imm_byte(&mut self.dx, self.mem[(self.ip + 1) as usize], false),
@@ -1138,49 +1157,53 @@ ip: 0x{:X}",
                 // RET
                 pop_reg(&self.mem, &mut self.sp, &mut self.ip);
                 0
-            },
+            }
             0xC7 => self.do_rm_imm_word_inst(|rm, imm, _flags| {
                 *rm = imm;
             }),
             // 0xE0 => self.do_imm_inst(|ip, imm, _flags| {
-                
+
             // }),
             0xE8 => {
                 // CALL
                 let return_address = self.ip + 3; // next instruction after this one (3 bytes after)
                 push_reg(&mut self.mem, &mut self.sp, return_address);
                 // add the displacement to IP
-                self.ip += read_word(&self.mem, (self.ip as usize) + 1);
+                let disp = read_word(&self.mem, (self.ip as usize) + 1);
+                // todo check if this is correct
+                self.ip = self.ip.wrapping_add(disp);
                 3
-            },
+            }
             0xE9 => {
                 self.ip += read_word(&self.mem, (self.ip as usize) + 1);
                 3
-            },
+            }
             0xEB => {
-                let sval = self.mem[(self.ip as usize) + 1] as i16;
-                let sip = (self.ip as i16) + sval;
-                self.ip = sip as u16;
+                let sval = self.mem[(self.ip as usize) + 1] as i8;
+                self.ip = self.ip.wrapping_add_signed(sval as i16);
                 2
-            },
+            }
             0xF4 => self.halt_cpu(),
             0xF8 => {
                 self.flag.set_bit(CARRY_FLAG, false);
                 1
-            },
+            }
             0xF9 => {
                 self.flag.set_bit(CARRY_FLAG, true);
                 1
-            },
+            }
             0xFE => self.do_grp2_inst(|rm, reg, flags| {
                 let _ = match reg {
                     0x00 => inc_byte(rm, flags),
                     0x01 => dec_byte(rm, flags),
-                    _ => panic!("inc/dec: unexpected reg value")
+                    _ => panic!("inc/dec: unexpected reg value"),
                 };
             }),
 
-            inst => self.cpu_panic(&format!("Unknown instruction: 0x{:X}", inst)),
+            inst => {
+                self.dump_registers();
+                panic!("Unknown instruction 0x{:X}", inst)
+            }
         };
         self.ip += ip_increment;
     }
@@ -1356,7 +1379,7 @@ mod tests {
         assert_eq!(cpu.ax, 0x1234);
         assert_eq!(cpu.ip, 0x03);
         assert_eq!(cpu.flag, old_flags);
-        
+
         // MOV [0x1234], 0x5678
         cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.mem[0] = 0xC7;
@@ -1369,7 +1392,7 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(read_word(&cpu.mem, 0x1234), 0x5678);
         assert_eq!(cpu.flag, old_flags);
-        
+
         // MOV BX, 0x1234
         cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.bx = 0;
@@ -1382,6 +1405,17 @@ mod tests {
         assert_eq!(cpu.bx, 0x1234);
         assert_eq!(cpu.ip, 0x04);
         assert_eq!(cpu.flag, old_flags);
+
+        // saw this cause an overflow
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x123;
+        cpu.bx = 0x8000;
+        cpu.cx = 0x7;
+        cpu.di = 0xFFF2;
+        cpu.sp = 0xFFA;
+        cpu.mem[0] = 0x88;
+        cpu.mem[1] = 0x01;
+        cpu.do_cycle();
 
         // MOV [0x1234], AX
         // A3 not implemented yet
@@ -1505,6 +1539,27 @@ mod tests {
         assert!(cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
+
+        // 80 8f d5 01 00
+        // or     BYTE PTR [bx+0x1d5],0x0
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x20;
+        cpu.bx = 0x2;
+        cpu.cx = 0x15;
+        cpu.dx = 0x190;
+        cpu.di = 0xFFBE;
+        cpu.sp = 0x1000;
+        cpu.ip = 0x11D;
+        cpu.mem[0x11D] = 0x80;
+        cpu.mem[0x11E] = 0x8F;
+        cpu.mem[0x11F] = 0xD5;
+        cpu.mem[0x120] = 0x01;
+        cpu.mem[0x121] = 0x00;
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x122);
+
+        // 81 3e d3 01 e0 01
+        // cmp    WORD PTR ds:0x1d3,0x1e0
     }
 
     #[test]
@@ -1528,7 +1583,7 @@ mod tests {
         assert_eq!(cpu.ip, 1);
         assert!(cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
-        
+
         // INC BYTE PTR [0x1234]
         cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.mem[0] = 0xFE;
@@ -1541,7 +1596,7 @@ mod tests {
         assert!(cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        
+
         // DEC AL
         cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.ax = 0x6901;
@@ -1576,6 +1631,14 @@ mod tests {
         cpu.mem[1] = 0x02;
         cpu.do_cycle();
         assert_eq!(cpu.ip, 0x0004);
+
+        // eb f5
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ip = 0x1B4;
+        cpu.mem[0x1B4] = 0xEB;
+        cpu.mem[0x1B5] = 0xF5;
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x1AB);
     }
 
     #[test]
