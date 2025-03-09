@@ -606,6 +606,41 @@ ip: 0x{:X}",
         }
     }
 
+    // TODO: again another function that should be possible to generalize
+    fn do_rm_imm_word_inst<F>(&mut self, op: F) -> u16 
+    where
+        F: Fn(&mut u16, u16, &mut u16),
+    {
+        let ip = self.ip as usize;
+        let modrm_byte = self.mem[ip + 1];
+        let (id_mod, _, id_rm) = parse_mod_rm_byte(modrm_byte);
+        //println!("ip: {}, modrm_byte: {:X}, mod: {:X}, rm: {:X}", ip, modrm_byte, id_mod, id_rm);
+        if id_mod < 0x03 {
+            let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
+            let mut rm_value = read_word(&self.mem, address as usize);
+            let imm = read_word(&self.mem, ip + ip_increment as usize);
+
+            op(&mut rm_value, imm, &mut self.flag);
+
+            write_word(&mut self.mem, address as usize, rm_value);
+
+            ip_increment + 2 // adding two bytes for the immediate value
+        } else {
+            // Operand is a register
+            let mut rm = self.get_reg_word_code(id_rm);
+            // Immmediate value is 2 bytes after ip
+            let imm = read_word(&self.mem, ip + 2);
+            //println!("rm: {:X}, imm: {:X}", rm, imm);
+
+            op(&mut rm, imm, &mut self.flag);
+
+            // Update the register values.
+            self.set_reg_word_code(id_rm, rm);
+
+            4
+        }
+    }
+
     fn do_imm_inst<F>(&mut self, op: F) -> u16
     where
         F: Fn(u16, &[u8], &mut u16, &mut u16),
@@ -1092,6 +1127,9 @@ ip: 0x{:X}",
                 pop_reg(mem, sp, ip);
                 0
             })(&self.mem, &mut self.ip, &mut self.sp),
+            0xC7 => self.do_rm_imm_word_inst(|rm, imm, _flags| {
+                *rm = imm;
+            }),
             0xE8 => (|mem: &mut [u8], ip: &mut u16, sp: &mut u16| {
                 // CALL
                 let return_address = *ip + 3; // next instruction after this one (3 bytes after)
@@ -1298,9 +1336,37 @@ mod tests {
         cpu.mem[0] = 0xB8;
         cpu.mem[1] = 0x34;
         cpu.mem[2] = 0x12;
+        let old_flags = cpu.flag;
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0x1234);
         assert_eq!(cpu.ip, 0x03);
+        assert_eq!(cpu.flag, old_flags);
+        
+        // MOV [0x1234], 0x5678
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.mem[0] = 0xC7;
+        cpu.mem[1] = 0x06;
+        cpu.mem[2] = 0x34;
+        cpu.mem[3] = 0x12;
+        cpu.mem[4] = 0x78;
+        cpu.mem[5] = 0x56;
+        let old_flags = cpu.flag;
+        cpu.do_cycle();
+        assert_eq!(read_word(&cpu.mem, 0x1234), 0x5678);
+        assert_eq!(cpu.flag, old_flags);
+        
+        // MOV BX, 0x1234
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.bx = 0;
+        cpu.mem[0] = 0xC7;
+        cpu.mem[1] = 0xC3;
+        cpu.mem[2] = 0x34;
+        cpu.mem[3] = 0x12;
+        let old_flags = cpu.flag;
+        cpu.do_cycle();
+        assert_eq!(cpu.bx, 0x1234);
+        assert_eq!(cpu.ip, 0x04);
+        assert_eq!(cpu.flag, old_flags);
 
         // MOV [0x1234], AX
         // A3 not implemented yet
