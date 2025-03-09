@@ -105,6 +105,20 @@ fn dec_reg(reg: &mut u16, flags: &mut u16) -> u16 {
     1
 }
 
+fn inc_byte(reg: &mut u8, flags: &mut u16) -> u16 {
+    *reg = (*reg).wrapping_add(1);
+    flags.set_bit(ZERO_FLAG, *reg == 0);
+    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(*reg));
+    1
+}
+
+fn dec_byte(reg: &mut u8, flags: &mut u16) -> u16 {
+    *reg = (*reg).wrapping_sub(1);
+    flags.set_bit(ZERO_FLAG, *reg == 0);
+    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(*reg));
+    1
+}
+
 fn push_reg(mem: &mut [u8], sp: &mut u16, reg: u16) -> u16 {
     *sp -= 2;
     write_word(mem, *sp as usize, reg);
@@ -128,6 +142,16 @@ fn mov_reg_imm_byte(reg: &mut u16, imm: u8, high: bool) -> u16 {
         (*reg).set_low(imm);
     }
     2
+}
+
+fn parse_mod_rm_byte(modrm: u8) -> (u8, u8, u8) {
+    // Mod R/M byte format
+    // 00 | 000 | 000
+    // Mod  Reg   R/M
+    let id_mod = (modrm & 0xC0) >> 6;
+    let id_reg = (modrm & 0x38) >> 3;
+    let id_rm = modrm & 0x07;
+    (id_mod, id_reg, id_rm)
 }
 
 impl Cpu {
@@ -309,19 +333,48 @@ ip: 0x{:X}",
         (address, ip_increment)
     }
 
+    // TODO: It shouldn't be hard to generalize do_byte_inst to accomodate this use case too
+    // Only difference is we don't map 'reg' to a register value. grp2 instructions have specific
+    // uses for the 'reg' value.
+    fn do_grp2_inst<F>(&mut self, op: F) -> u16 
+    where
+        F: Fn(&mut u8, u8, &mut u16),
+    {
+        let ip = self.ip as usize;
+        let modrm_byte = self.mem[ip + 1];
+        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
+
+        if id_mod < 0x03 {
+            let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
+            let mut rm = self.mem[address as usize];
+            //let mut reg = self.get_reg_byte_code(id_reg);
+
+            op(&mut rm, id_reg, &mut self.flag);
+
+            self.mem[address as usize] = rm;
+            //self.set_reg_byte_code(id_reg, reg);
+            ip_increment
+        } else {
+            // Both operands are registers. Get their current values and pass to operation.
+            let mut rm = self.get_reg_byte_code(id_rm);
+
+            op(&mut rm, id_reg, &mut self.flag);
+
+            // Update the register values.
+            //self.set_reg_byte_code(id_reg, reg);
+            self.set_reg_byte_code(id_rm, rm);
+            2
+        }
+    }
+
     fn do_byte_inst<F>(&mut self, op: F) -> u16
     where
         F: Fn(&mut u8, &mut u8, &mut u16),
     {
         let ip = self.ip as usize;
         let modrm_byte = self.mem[ip + 1];
+        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
 
-        // Mod R/M byte format
-        // 00 | 000 | 000
-        // Mod  Reg   R/M
-        let id_mod = (modrm_byte & 0xC0) >> 6;
-        let id_reg = (modrm_byte & 0x38) >> 3;
-        let id_rm = modrm_byte & 0x07;
         if id_mod < 0x03 {
             let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
             let mut rm = self.mem[address as usize];
@@ -350,13 +403,7 @@ ip: 0x{:X}",
     fn do_opext_inst(&mut self, word_inst: bool, imm_byte: bool) -> u16 {
         let ip = self.ip as usize;
         let modrm_byte = self.mem[ip + 1];
-
-        // Mod R/M byte format
-        // 00 | 000 | 000
-        // Mod  Reg   R/M
-        let id_mod = (modrm_byte & 0xC0) >> 6;
-        let id_reg = (modrm_byte & 0x38) >> 3;
-        let id_rm = modrm_byte & 0x07;
+        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
 
         let byte_op: Box<dyn Fn(&mut u8, u8, &mut u16)> = match id_reg {
             0x00 => Box::new(|rm: &mut u8, imm: u8, flag: &mut u16| {
@@ -529,13 +576,7 @@ ip: 0x{:X}",
     {
         let ip = self.ip as usize;
         let modrm_byte = self.mem[ip + 1];
-
-        // Mod R/M byte format
-        // 00 | 000 | 000
-        // Mod  Reg   R/M
-        let id_mod = (modrm_byte & 0xC0) >> 6;
-        let id_reg = (modrm_byte & 0x38) >> 3;
-        let id_rm = modrm_byte & 0x07;
+        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
 
         if id_mod < 0x03 {
             let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
@@ -907,12 +948,12 @@ ip: 0x{:X}",
             }),
             0x3C => self.do_imm_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
                 let imm = mem[(ip + 1) as usize];
-                let val = ax.get_low() - imm; // TODO wrapping
+                let val = ax.get_low().wrapping_sub(imm);
                 calc_sub_byte_flags(flag, ax.get_low(), imm, val);
             }),
             0x3D => self.do_imm_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
                 let imm = read_word(mem, (ip + 1) as usize);
-                let val = *ax - imm; // TODO wrapping
+                let val = (*ax).wrapping_sub(imm);
                 calc_sub_word_flags(flag, *ax, imm, val);
             }),
             0x40 => inc_reg(&mut self.ax, &mut self.flag),
@@ -1078,6 +1119,13 @@ ip: 0x{:X}",
                 flag.set_bit(CARRY_FLAG, true);
                 1
             })(&mut self.flag),
+            0xFE => self.do_grp2_inst(|rm, reg, flags| {
+                let _ = match reg {
+                    0x00 => inc_byte(rm, flags),
+                    0x01 => dec_byte(rm, flags),
+                    _ => panic!("inc/dec: unexpected reg value")
+                };
+            }),
 
             inst => self.cpu_panic(&format!("Unknown instruction: 0x{:X}", inst)),
         };
@@ -1380,6 +1428,7 @@ mod tests {
 
     #[test]
     fn cpu_inc_dec_sanity() {
+        // INC AX
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.ax = 0xFFFF;
         cpu.mem[0] = 0x40;
@@ -1389,12 +1438,37 @@ mod tests {
         assert!(cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
 
+        // DEC AX
         cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.ax = 0x00001;
         cpu.mem[0] = 0x48;
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 1);
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        
+        // INC BYTE PTR [0x1234]
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.mem[0] = 0xFE;
+        cpu.mem[1] = 0x06;
+        cpu.mem[2] = 0x34;
+        cpu.mem[3] = 0x12;
+        cpu.mem[0x1234] = 0xFF;
+        cpu.do_cycle();
+        assert_eq!(cpu.mem[0x1234], 0);
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        
+        // DEC AL
+        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.ax = 0x6901;
+        cpu.mem[0] = 0xFE;
+        cpu.mem[1] = 0xC8;
+        cpu.do_cycle();
+        println!("{0:X}", cpu.ax);
+        assert_eq!(cpu.ax, 0x6900);
         assert!(cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
