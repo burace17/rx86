@@ -15,7 +15,7 @@ fn main() -> std::io::Result<()> {
     // accept mem size as argument and verify specified memory is larger than input program size
     buffer.resize(65535, 0);
 
-    let mut cpu = Cpu::new(true, buffer.into_boxed_slice());
+    let mut cpu = Cpu::new(buffer.into_boxed_slice());
     cpu.emulate();
     cpu.dump_video_ram();
     Ok(())

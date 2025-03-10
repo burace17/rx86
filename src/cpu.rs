@@ -25,7 +25,6 @@ pub struct Cpu {
 
     flag: u16,
     mem: Box<[u8]>,
-    debug: bool,
 
     pub breakpoints: Vec<u16>,
     pub step_mode: bool,
@@ -152,7 +151,7 @@ fn parse_mod_rm_byte(modrm: u8) -> (u8, u8, u8) {
 }
 
 impl Cpu {
-    pub fn new(debug: bool, mem: Box<[u8]>) -> Cpu {
+    pub fn new(mem: Box<[u8]>) -> Cpu {
         Cpu {
             ax: 0,
             bx: 0,
@@ -165,15 +164,14 @@ impl Cpu {
             ip: 0,
             flag: 0,
             mem,
-            debug,
             breakpoints: Vec::new(),
             step_mode: false,
         }
     }
 
     #[allow(unused)]
-    pub fn new_with_mem_size(debug: bool, mem_size: usize) -> Cpu {
-        Cpu::new(debug, vec![0; mem_size].into_boxed_slice())
+    pub fn new_with_mem_size(mem_size: usize) -> Cpu {
+        Cpu::new(vec![0; mem_size].into_boxed_slice())
     }
 
     pub fn emulate(&mut self) {
@@ -284,14 +282,7 @@ sf: {}",
         panic!("{}", msg);
     }
 
-    #[allow(unused)]
-    fn cpu_debug_msg(&self, msg: &'static str) {
-        if self.debug {
-            println!("{}", msg);
-        }
-    }
-
-    fn get_reg_word_code(&self, reg_code: u8) -> u16 {
+    fn get_register_value_by_modrm_reg_code(&self, reg_code: u8) -> u16 {
         match reg_code {
             0b000 => self.ax,
             0b001 => self.cx,
@@ -305,7 +296,7 @@ sf: {}",
         }
     }
 
-    fn set_reg_word_code(&mut self, reg_code: u8, value: u16) {
+    fn set_register_value_by_modrm_reg_code(&mut self, reg_code: u8, value: u16) {
         match reg_code {
             0b000 => self.ax = value,
             0b001 => self.cx = value,
@@ -319,7 +310,7 @@ sf: {}",
         }
     }
 
-    fn get_reg_byte_code(&self, reg_code: u8) -> u8 {
+    fn get_register_byte_value_by_modrm_reg_code(&self, reg_code: u8) -> u8 {
         match reg_code {
             0b000 => self.ax.get_low(),
             0b001 => self.cx.get_low(),
@@ -333,7 +324,7 @@ sf: {}",
         }
     }
 
-    fn set_reg_byte_code(&mut self, reg_code: u8, value: u8) {
+    fn set_register_byte_value_by_modrm_reg_code(&mut self, reg_code: u8, value: u8) {
         match reg_code {
             0b000 => self.ax.set_low(value),
             0b001 => self.cx.set_low(value),
@@ -347,10 +338,11 @@ sf: {}",
         }
     }
 
-    fn read_rm_address(&self, id_mod: u8, id_rm: u8) -> (u16, u16) {
+    // From a the mod and rm parts of the modrm byte, return the memory address and displacement
+    fn read_address_from_modrm(&self, id_mod: u8, id_rm: u8) -> (u16, u16) {
         // Operand is a memory address.
         let ip = self.ip as usize;
-        let mut ip_increment = 2;
+        let mut displacement = 2;
         let mut address = match id_rm {
             0x00 => self.bx.wrapping_add(self.si),
             0x01 => self.bx.wrapping_add(self.di),
@@ -361,12 +353,12 @@ sf: {}",
             0x06 if id_mod == 0 => read_word(&self.mem, ip + 2),
             0x06 => self.bp,
             0x07 => self.bx,
-            _ => self.cpu_panic("do_word_inst: failed to parse R/M bits of mod R/M"),
+            _ => self.cpu_panic("read_address_from_modrm: failed to parse R/M bits of mod R/M"),
         };
 
         // bp uses 16 bit displacement
         if id_rm == 0x06 && id_mod == 0 {
-            ip_increment = 4;
+            displacement = 4;
         }
 
         if id_mod == 0x01 {
@@ -374,15 +366,15 @@ sf: {}",
             let mut signed_address = address as i16;
             signed_address += dc;
             address = signed_address as u16;
-            ip_increment = 4;
+            displacement = 4;
         } else if id_mod == 0x02 {
             let dw = read_word(&self.mem, ip + 2) as i16;
             let mut signed_address = address as i16;
             signed_address += dw;
             address = signed_address as u16;
-            ip_increment = 4;
+            displacement = 4;
         }
-        (address, ip_increment)
+        (address, displacement)
     }
 
     // TODO: It shouldn't be hard to generalize do_byte_inst to accomodate this use case too
@@ -397,24 +389,21 @@ sf: {}",
         let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
 
         if id_mod < 0x03 {
-            let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
+            let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
             let mut rm = self.mem[address as usize];
-            //let mut reg = self.get_reg_byte_code(id_reg);
 
             op(&mut rm, id_reg, &mut self.flag);
 
             self.mem[address as usize] = rm;
-            //self.set_reg_byte_code(id_reg, reg);
             ip_increment
         } else {
             // Both operands are registers. Get their current values and pass to operation.
-            let mut rm = self.get_reg_byte_code(id_rm);
+            let mut rm = self.get_register_byte_value_by_modrm_reg_code(id_rm);
 
             op(&mut rm, id_reg, &mut self.flag);
 
             // Update the register values.
-            //self.set_reg_byte_code(id_reg, reg);
-            self.set_reg_byte_code(id_rm, rm);
+            self.set_register_byte_value_by_modrm_reg_code(id_rm, rm);
             2
         }
     }
@@ -428,26 +417,26 @@ sf: {}",
         let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
 
         if id_mod < 0x03 {
-            let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
+            let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
             let mut rm = self.mem[address as usize];
-            let mut reg = self.get_reg_byte_code(id_reg);
+            let mut reg = self.get_register_byte_value_by_modrm_reg_code(id_reg);
 
             op(&mut rm, &mut reg, &mut self.flag);
 
             self.mem[address as usize] = rm;
-            self.set_reg_byte_code(id_reg, reg);
+            self.set_register_byte_value_by_modrm_reg_code(id_reg, reg);
             ip_increment
         } else {
             // Both operands are registers. Get their current values and pass to operation.
-            let mut reg = self.get_reg_byte_code(id_reg);
-            let mut rm = self.get_reg_byte_code(id_rm);
+            let mut reg = self.get_register_byte_value_by_modrm_reg_code(id_reg);
+            let mut rm = self.get_register_byte_value_by_modrm_reg_code(id_rm);
 
             op(&mut rm, &mut reg, &mut self.flag);
 
             // TODO we have to look up the code twice. a bit inefficient.
             // Update the register values.
-            self.set_reg_byte_code(id_reg, reg);
-            self.set_reg_byte_code(id_rm, rm);
+            self.set_register_byte_value_by_modrm_reg_code(id_reg, reg);
+            self.set_register_byte_value_by_modrm_reg_code(id_rm, rm);
             2
         }
     }
@@ -576,7 +565,7 @@ sf: {}",
 
         if id_mod < 0x03 {
             // R/M is memory.
-            let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
+            let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
             //println!("ip increment: {:X}", ip_increment);
             if word_inst && !imm_byte {
                 let imm = read_word(&self.mem, ip + 4);
@@ -604,23 +593,23 @@ sf: {}",
 
             if word_inst && !imm_byte {
                 let imm = read_word(&self.mem, ip + 2);
-                let mut rm = self.get_reg_word_code(id_rm);
+                let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
                 word_op(&mut rm, imm, &mut self.flag);
-                self.set_reg_word_code(id_rm, rm);
+                self.set_register_value_by_modrm_reg_code(id_rm, rm);
                 4
             } else if word_inst && imm_byte {
                 // NOTE byte is sign extended!
                 let imm_byte = self.mem[ip + 2] as i8;
                 let imm = imm_byte as i16; // sign extend
-                let mut rm = self.get_reg_word_code(id_rm);
+                let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
                 word_op(&mut rm, imm as u16, &mut self.flag);
-                self.set_reg_word_code(id_rm, rm);
+                self.set_register_value_by_modrm_reg_code(id_rm, rm);
                 3
             } else {
                 let imm = self.mem[ip + 2];
-                let mut rm = self.get_reg_byte_code(id_rm);
+                let mut rm = self.get_register_byte_value_by_modrm_reg_code(id_rm);
                 byte_op(&mut rm, imm, &mut self.flag);
-                self.set_reg_byte_code(id_rm, rm);
+                self.set_register_byte_value_by_modrm_reg_code(id_rm, rm);
                 3
             }
         }
@@ -635,28 +624,28 @@ sf: {}",
         let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
 
         if id_mod < 0x03 {
-            let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
+            let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
 
             let mut rm_value = read_word(&self.mem, address as usize);
-            let mut reg = self.get_reg_word_code(id_reg);
+            let mut reg = self.get_register_value_by_modrm_reg_code(id_reg);
 
             op(&mut rm_value, &mut reg, &mut self.flag);
 
             write_word(&mut self.mem, address as usize, rm_value);
-            self.set_reg_word_code(id_reg, reg);
+            self.set_register_value_by_modrm_reg_code(id_reg, reg);
 
             ip_increment
         } else {
             // Both operands are registers. Get their current values and pass to operation.
-            let mut reg = self.get_reg_word_code(id_reg);
-            let mut rm = self.get_reg_word_code(id_rm);
+            let mut reg = self.get_register_value_by_modrm_reg_code(id_reg);
+            let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
 
             op(&mut rm, &mut reg, &mut self.flag);
 
             // TODO we have to look up the code twice. a bit inefficient.
             // Update the register values.
-            self.set_reg_word_code(id_reg, reg);
-            self.set_reg_word_code(id_rm, rm);
+            self.set_register_value_by_modrm_reg_code(id_reg, reg);
+            self.set_register_value_by_modrm_reg_code(id_rm, rm);
 
             2
         }
@@ -672,7 +661,7 @@ sf: {}",
         let (id_mod, _, id_rm) = parse_mod_rm_byte(modrm_byte);
         //println!("ip: {}, modrm_byte: {:X}, mod: {:X}, rm: {:X}", ip, modrm_byte, id_mod, id_rm);
         if id_mod < 0x03 {
-            let (address, ip_increment) = self.read_rm_address(id_mod, id_rm);
+            let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
             let mut rm_value = read_word(&self.mem, address as usize);
             let imm = read_word(&self.mem, ip + ip_increment as usize);
 
@@ -683,7 +672,7 @@ sf: {}",
             ip_increment + 2 // adding two bytes for the immediate value
         } else {
             // Operand is a register
-            let mut rm = self.get_reg_word_code(id_rm);
+            let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
             // Immmediate value is 2 bytes after ip
             let imm = read_word(&self.mem, ip + 2);
             //println!("rm: {:X}, imm: {:X}", rm, imm);
@@ -691,7 +680,7 @@ sf: {}",
             op(&mut rm, imm, &mut self.flag);
 
             // Update the register values.
-            self.set_reg_word_code(id_rm, rm);
+            self.set_register_value_by_modrm_reg_code(id_rm, rm);
 
             4
         }
@@ -1271,7 +1260,7 @@ mod tests {
     #[test]
     fn cpu_sanity() {
         // NOP
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0x90;
         cpu.do_cycle();
         assert_eq!(cpu.ip, 1);
@@ -1283,7 +1272,7 @@ mod tests {
         assert_eq!(cpu.sp, 0x0100);
         assert_eq!(cpu.flag, 0);
 
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 69;
         cpu.cx = 42;
         cpu.dx = 1;
@@ -1343,7 +1332,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
 
         // ADD AX, BX
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x1234;
         cpu.bx = 0x5678;
         cpu.flag.set_bit(CARRY_FLAG, true);
@@ -1356,7 +1345,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
 
         // MOV [BX+SI+0x1234], AX
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0xA55A;
         cpu.bx = 0x1000;
         cpu.si = 0x2000;
@@ -1375,7 +1364,7 @@ mod tests {
 
     #[test]
     fn cpu_byte_sanity() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 27;
         cpu.mem[0] = 0x00;
         cpu.mem[1] = 0x06;
@@ -1387,7 +1376,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
 
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.cx = 245;
         cpu.mem[0] = 0x00;
         cpu.mem[1] = 0x0E;
@@ -1399,7 +1388,7 @@ mod tests {
         assert!(cpu.flag.get_bit(CARRY_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
 
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.bx = 125;
         cpu.mem[0] = 0x00;
         cpu.mem[1] = 0x1E;
@@ -1411,7 +1400,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
         assert!(cpu.flag.get_bit(SIGN_FLAG));
 
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0x04;
         cpu.mem[1] = 1;
         cpu.ax = 0x3445;
@@ -1422,7 +1411,7 @@ mod tests {
     #[test]
     fn cpu_mov_sanity() {
         // MOV AX, 0x1234
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0xB8;
         cpu.mem[1] = 0x34;
         cpu.mem[2] = 0x12;
@@ -1433,7 +1422,7 @@ mod tests {
         assert_eq!(cpu.flag, old_flags);
 
         // MOV [0x1234], 0x5678
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0xC7;
         cpu.mem[1] = 0x06;
         cpu.mem[2] = 0x34;
@@ -1446,7 +1435,7 @@ mod tests {
         assert_eq!(cpu.flag, old_flags);
 
         // MOV BX, 0x1234
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.bx = 0;
         cpu.mem[0] = 0xC7;
         cpu.mem[1] = 0xC3;
@@ -1459,7 +1448,7 @@ mod tests {
         assert_eq!(cpu.flag, old_flags);
 
         // saw this cause an overflow
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x123;
         cpu.bx = 0x8000;
         cpu.cx = 0x7;
@@ -1472,7 +1461,7 @@ mod tests {
         // MOV [0x1234], AX
         // A3 not implemented yet
         /*
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x5678;
         cpu.mem[0] = 0xA3;
         cpu.mem[1] = 0x34;
@@ -1488,7 +1477,7 @@ mod tests {
     fn cpu_stack_sanity() {
         // PUSH AX
         // POP BX
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x1234;
         cpu.sp = 0x0100;
         cpu.mem[0] = 0x50;
@@ -1508,7 +1497,7 @@ mod tests {
     #[test]
     fn cpu_xchg_sanity() {
         // XCHG AX, BX
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x1234;
         cpu.bx = 0x5678;
         cpu.mem[0] = 0x87;
@@ -1522,7 +1511,7 @@ mod tests {
     #[test]
     fn cpu_arithmetic_sanity() {
         // ADD AX, BX
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0xFFFF;
         cpu.bx = 0x0001;
         cpu.mem[0] = 0x01;
@@ -1536,7 +1525,7 @@ mod tests {
 
         // STC
         // ADC AX, BX
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x0001;
         cpu.bx = 0x0001;
         cpu.mem[0] = 0xF9;
@@ -1549,7 +1538,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
 
         // SUB AX, BX
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x0001;
         cpu.bx = 0x0002;
         cpu.mem[0] = 0x29;
@@ -1563,7 +1552,7 @@ mod tests {
 
         // add    WORD PTR ds:0x1d3,0x4c
         // 83 06 d3 01 4c
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0x83;
         cpu.mem[1] = 0x06;
         cpu.mem[2] = 0xD3;
@@ -1577,7 +1566,7 @@ mod tests {
     #[test]
     fn cpu_logical_op_sanity() {
         // AND AX, BX
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0xFF00;
         cpu.bx = 0x00FF;
         cpu.mem[0] = 0x21;
@@ -1591,7 +1580,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
 
         // XOR AX, BX
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x1234;
         cpu.bx = 0x1234;
         cpu.mem[0] = 0x31;
@@ -1606,7 +1595,7 @@ mod tests {
 
         // 80 8f d5 01 00
         // or     BYTE PTR [bx+0x1d5],0x0
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x20;
         cpu.bx = 0x2;
         cpu.cx = 0x15;
@@ -1624,7 +1613,7 @@ mod tests {
 
         // 81 3e d3 01 e0 01
         // cmp    WORD PTR ds:0x1d3,0x1e0
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         write_word(&mut cpu.mem, 0x01D3, 0x01E0);
         cpu.mem[0] = 0x81;
         cpu.mem[1] = 0x3E;
@@ -1658,7 +1647,7 @@ mod tests {
     #[test]
     fn cpu_inc_dec_sanity() {
         // INC AX
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0xFFFF;
         cpu.mem[0] = 0x40;
         cpu.do_cycle();
@@ -1668,7 +1657,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
 
         // DEC AX
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x00001;
         cpu.mem[0] = 0x48;
         cpu.do_cycle();
@@ -1678,7 +1667,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
 
         // INC BYTE PTR [0x1234]
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0xFE;
         cpu.mem[1] = 0x06;
         cpu.mem[2] = 0x34;
@@ -1691,7 +1680,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
 
         // DEC AL
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x6901;
         cpu.mem[0] = 0xFE;
         cpu.mem[1] = 0xC8;
@@ -1706,7 +1695,7 @@ mod tests {
     fn cpu_jmp_sanity() {
         // CMP AX, BX
         // JZ +2
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x1234;
         cpu.bx = 0x1234;
         cpu.mem[0] = 0x3B;
@@ -1719,14 +1708,14 @@ mod tests {
         assert!(cpu.flag.get_bit(ZERO_FLAG));
 
         // JMP +2
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0xEB;
         cpu.mem[1] = 0x02;
         cpu.do_cycle();
         assert_eq!(cpu.ip, 0x0004);
 
         // eb f5
-        cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ip = 0x1B4;
         cpu.mem[0x1B4] = 0xEB;
         cpu.mem[0x1B5] = 0xF5;
@@ -1738,7 +1727,7 @@ mod tests {
     fn cpu_subroutine_sanity() {
         // CALL 0x0005
         // RET
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.sp = 0x0100;
         cpu.mem[0] = 0xE8;
         cpu.mem[1] = 0x02;
@@ -1756,7 +1745,7 @@ mod tests {
     fn cpu_flag_sanity() {
         // STC
         // CLC
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0xF9;
         cpu.mem[1] = 0xF8;
         cpu.do_cycle();
@@ -1805,7 +1794,7 @@ mod tests {
     // Instruction tests
     #[test]
     fn test_80_add_mem() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // ADD BYTE [0x1234], 0x0A
         cpu.mem[0..5].copy_from_slice(&[0x80, 0x06, 0x34, 0x12, 0x0A]);
         cpu.mem[0x1234] = 0x0A;
@@ -1820,7 +1809,7 @@ mod tests {
 
     #[test]
     fn test_80_add_reg_overflow() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // ADD AL, 0x01
         cpu.mem[0..3].copy_from_slice(&[0x80, 0xC0, 0x01]);
         cpu.ax = 0x00FF;
@@ -1835,7 +1824,7 @@ mod tests {
 
     #[test]
     fn test_80_sub_underflow() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // SUB BL, 0x01
         cpu.mem[0..3].copy_from_slice(&[0x80, 0xEB, 0x01]);
         cpu.bx = 0x0000;
@@ -1850,7 +1839,7 @@ mod tests {
 
     #[test]
     fn test_80_cmp_zero() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // CMP BYTE [0x1234], 0x12
         cpu.mem[0..5].copy_from_slice(&[0x80, 0x3E, 0x34, 0x12, 0x12]);
         cpu.mem[0x1234] = 0x12;
@@ -1864,7 +1853,7 @@ mod tests {
 
     #[test]
     fn test_30_xor_zero() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // XOR CL, CL
         cpu.mem[0..2].copy_from_slice(&[0x30, 0xC9]);
         cpu.cx = 0x00AA;
@@ -1879,7 +1868,7 @@ mod tests {
 
     #[test]
     fn test_81_add_reg_overflow() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // ADD AX, 0x0001
         cpu.mem[0..4].copy_from_slice(&[0x81, 0xC0, 0x01, 0x00]);
         cpu.ax = 0xFFFF;
@@ -1894,7 +1883,7 @@ mod tests {
 
     #[test]
     fn test_81_cmp_reg_signed() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // CMP BX, 0x8000
         cpu.mem[0..4].copy_from_slice(&[0x81, 0xFB, 0x00, 0x80]);
         cpu.bx = 0x7FFF;
@@ -1909,7 +1898,7 @@ mod tests {
 
     #[test]
     fn test_81_sub_mem_negative() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // SUB WORD [0x1234], 0xFF80 (equivalent to adding 0x0080)
         cpu.mem[0..6].copy_from_slice(&[0x81, 0x2E, 0x34, 0x12, 0x80, 0xFF]);
         write_word(&mut cpu.mem, 0x1234, 0x0005);
@@ -1924,7 +1913,7 @@ mod tests {
 
     #[test]
     fn test_81_add_max_signed() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // ADD AX, 0x7FFF
         cpu.mem[0..4].copy_from_slice(&[0x81, 0xC0, 0xFF, 0x7F]);
         cpu.ax = 0x0001;
@@ -1939,7 +1928,7 @@ mod tests {
 
     #[test]
     fn test_82_add_positive() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADD BYTE [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x82, 0x06, 0x34, 0x12, 0x01]);
         cpu.mem[0x1234] = 0x01;
@@ -1954,7 +1943,7 @@ mod tests {
 
     #[test]
     fn test_82_add_al_positive() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADD AL, 0x01
         cpu.mem[0..3].copy_from_slice(&[0x82, 0xC0, 0x01]);
         cpu.ax = 0x0001; // AL = 0x01
@@ -1969,7 +1958,7 @@ mod tests {
 
     #[test]
     fn test_82_add_overflow() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADD BYTE [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x82, 0x06, 0x34, 0x12, 0x01]);
         cpu.mem[0x1234] = 0xFF;
@@ -1984,7 +1973,7 @@ mod tests {
 
     #[test]
     fn test_82_add_negative() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADD BYTE [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x82, 0x06, 0x34, 0x12, 0x01]);
         cpu.mem[0x1234] = 0x7F; // 127 + 1 = 128 (0x80, signed -128)
@@ -1999,7 +1988,7 @@ mod tests {
 
     #[test]
     fn test_82_sub_borrow() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: SUB BYTE [0x1234], 0xFF (subtract 255)
         cpu.mem[0..5].copy_from_slice(&[0x82, 0x2E, 0x34, 0x12, 0xFF]);
         cpu.mem[0x1234] = 0x05;
@@ -2014,7 +2003,7 @@ mod tests {
 
     #[test]
     fn test_82_sub_bl_borrow() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0..3].copy_from_slice(&[0x82, 0xEB, 0xFF]);
         cpu.bx = 0x0005; // BL = 0x05
         cpu.do_cycle();
@@ -2028,7 +2017,7 @@ mod tests {
 
     #[test]
     fn test_82_cmp_signed() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: CMP BYTE [0x1234], 0x80 (compare 127 vs -128)
         cpu.mem[0..5].copy_from_slice(&[0x82, 0x3E, 0x34, 0x12, 0x80]);
         cpu.mem[0x1234] = 0x7F; // 127
@@ -2042,7 +2031,7 @@ mod tests {
 
     #[test]
     fn test_82_add_max_positive() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADD BYTE [0x1234], 0x7F (127)
         cpu.mem[0..5].copy_from_slice(&[0x82, 0x06, 0x34, 0x12, 0x7F]);
         cpu.mem[0x1234] = 0x01;
@@ -2057,7 +2046,7 @@ mod tests {
 
     #[test]
     fn test_83_add_positive() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADD WORD [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x06, 0x34, 0x12, 0x01]);
         write_word(&mut cpu.mem, 0x1234, 0x0001);
@@ -2072,7 +2061,7 @@ mod tests {
 
     #[test]
     fn test_83_add_ax_overflow() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0..3].copy_from_slice(&[0x83, 0xC0, 0x01]);
         cpu.ax = 0xFFFF;
         cpu.do_cycle();
@@ -2086,7 +2075,7 @@ mod tests {
 
     #[test]
     fn test_83_add_carry() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADD WORD [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x06, 0x34, 0x12, 0x01]);
         write_word(&mut cpu.mem, 0x1234, 0xFFFF);
@@ -2101,7 +2090,7 @@ mod tests {
 
     #[test]
     fn test_83_add_negative() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADD WORD [0x1234], 0xFF
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x06, 0x34, 0x12, 0xFF]);
         write_word(&mut cpu.mem, 0x1234, 0x0002);
@@ -2116,7 +2105,7 @@ mod tests {
 
     #[test]
     fn test_83_add_zero() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADD WORD [0x1234], 0xFF
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x06, 0x34, 0x12, 0xFF]);
         write_word(&mut cpu.mem, 0x1234, 0x0001);
@@ -2131,7 +2120,7 @@ mod tests {
 
     #[test]
     fn test_83_sub_underflow() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: SUB WORD [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x2E, 0x34, 0x12, 0x01]);
         write_word(&mut cpu.mem, 0x1234, 0x0000);
@@ -2146,7 +2135,7 @@ mod tests {
 
     #[test]
     fn test_83_sub_ax_underflow() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0..3].copy_from_slice(&[0x83, 0xE8, 0x80]);
         cpu.ax = 0x0000;
         cpu.do_cycle();
@@ -2160,7 +2149,7 @@ mod tests {
 
     #[test]
     fn test_83_sub_negative() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: SUB WORD [0x1234], 0xFF
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x2E, 0x34, 0x12, 0xFF]);
         write_word(&mut cpu.mem, 0x1234, 0x0005);
@@ -2175,7 +2164,7 @@ mod tests {
 
     #[test]
     fn test_83_sub_bx_negative() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0..3].copy_from_slice(&[0x83, 0xEB, 0xFF]);
         cpu.bx = 0x0005;
         cpu.do_cycle();
@@ -2189,7 +2178,7 @@ mod tests {
 
     #[test]
     fn test_83_cmp_equal() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: CMP WORD [0x1234], 0x34
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x3E, 0x34, 0x12, 0x34]);
         write_word(&mut cpu.mem, 0x1234, 0x0034);
@@ -2203,7 +2192,7 @@ mod tests {
 
     #[test]
     fn test_83_cmp_unsigned_less() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: CMP WORD [0x1234], 0x80
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x3E, 0x34, 0x12, 0x80]);
         write_word(&mut cpu.mem, 0x1234, 0x007F);
@@ -2217,7 +2206,7 @@ mod tests {
 
     #[test]
     fn test_83_adc() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: ADC WORD [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x16, 0x34, 0x12, 0x01]);
         write_word(&mut cpu.mem, 0x1234, 0x0001);
@@ -2233,7 +2222,7 @@ mod tests {
 
     #[test]
     fn test_83_sbb() {
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // Instruction: SBB WORD [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x1E, 0x34, 0x12, 0x01]);
         write_word(&mut cpu.mem, 0x1234, 0x0005);
@@ -2253,7 +2242,7 @@ mod tests {
     fn test_codegolf_reference_output() {
         let reference_output = include_bytes!("../test/test_codegolf_reference_output.bin");
         let reference_program = include_bytes!("../test/codegolf_reference_program");
-        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0..reference_program.len()].copy_from_slice(reference_program);
         cpu.emulate();
         assert_eq!(cpu.mem[0x8000..0x87D0], *reference_output);
