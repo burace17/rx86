@@ -193,8 +193,13 @@ impl Cpu {
 cx: 0x{:X}    dx: 0x{:X}
 si: 0x{:X}    di: 0x{:X}
 bp: 0x{:X}    sp: 0x{:X}
-ip: 0x{:X}",
-            self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp, self.ip
+ip: 0x{:X}
+cf: {}        zf: {}
+sf: {}",
+            self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp, self.ip,
+            self.flag.get_bit(CARRY_FLAG),
+            self.flag.get_bit(ZERO_FLAG),
+            self.flag.get_bit(SIGN_FLAG)
         );
     }
 
@@ -212,13 +217,6 @@ ip: 0x{:X}",
     pub fn dump_video_ram(&self) {
         let mut j = 0;
         for i in 0x8000..0x87D0 {
-            if j == 80 {
-                println!();
-                j = 0;
-            } else {
-                j += 1;
-            }
-
             let val = self.mem[i as usize];
             if val == 0 {
                 print!(" ");
@@ -226,11 +224,31 @@ ip: 0x{:X}",
                 let c = char::from(val);
                 print!("{}", c);
             }
+
+            j += 1;
+            if j == 80 {
+                println!();
+                j = 0;
+            }
+        }
+    }
+    
+    fn debug_read_memory_command(&self, input: &str, read_word: bool) {
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        if parts.len() == 2 {
+            let addr = u16::from_str_radix(parts[1], 16).unwrap();
+            if read_word {
+                println!("0x{:X}", crate::cpu::read_word(&self.mem, addr as usize));
+            } else {
+                println!("0x{:X}", self.mem[addr as usize]);
+            }
+        } else {
+            println!("Invalid read command. Usage: read_<byte/word> <address>");
         }
     }
 
-    fn handle_breakpoint(&mut self) {
-        println!("Stopped at: {:X}", self.ip);
+    fn handle_breakpoint(&mut self, opcode: u8) {
+        println!("Stopped at: {:X}. Next instruction: 0x{:X}", self.ip, opcode);
         self.dump_registers();
         self.dump_video_ram();
         println!();
@@ -246,6 +264,8 @@ ip: 0x{:X}",
                         self.step_mode = true;
                         break;
                     }
+                    _ if input.contains("read_word") => self.debug_read_memory_command(&input, true),
+                    _ if input.contains("read_byte") => self.debug_read_memory_command(&input, false),
                     _ => println!("Unknown debug command. Type 'g' to continue"),
                 }
             } else {
@@ -714,7 +734,7 @@ ip: 0x{:X}",
         //println!("opcode: 0x{:X}, ip: 0x{:X}", opcode, self.ip);
         //self.dump_registers();
         if self.step_mode || self.breakpoints.contains(&self.ip) {
-            self.handle_breakpoint();
+            self.handle_breakpoint(opcode);
         }
 
         let ip_increment = match opcode {
