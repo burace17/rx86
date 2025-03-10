@@ -1,11 +1,18 @@
 use crate::bits::Bits;
+use crate::instructions::{
+    calc_add_byte_flags, calc_add_word_flags, calc_byte_sign_bit, calc_sub_byte_flags,
+    calc_sub_word_flags, calc_word_sign_bit, dec_byte, dec_reg, inc_byte, inc_reg,
+    mov_reg_imm_byte, mov_reg_imm_word, parse_mod_rm_byte, pop_reg, push_reg, swap_reg,
+};
+use crate::memory::{read_word, write_word};
 use std::io;
 use std::mem;
-static CARRY_FLAG: u16 = 0;
+
+pub const CARRY_FLAG: u16 = 0;
 // static PARITY_FLAG: u16 = 2;
 // static AUX_CARRY_FLAG: u16 = 4;
-static ZERO_FLAG: u16 = 6;
-static SIGN_FLAG: u16 = 7;
+pub const ZERO_FLAG: u16 = 6;
+pub const SIGN_FLAG: u16 = 7;
 // static TRAP_FLAG: u16 = 8;
 // static INTERRUPT_FLAG: u16 = 9;
 // static DIRECTION_FLAG: u16 = 10;
@@ -38,126 +45,6 @@ enum CpuBreakResult {
     Continue,
     StepOver,
     Abort,
-}
-
-fn read_word(mem: &[u8], loc: usize) -> u16 {
-    u16::from_le_bytes([mem[loc], mem[loc + 1]])
-}
-
-fn write_word(mem: &mut [u8], loc: usize, val: u16) {
-    let bytes = val.to_le_bytes();
-    mem[loc] = bytes[0];
-    mem[loc + 1] = bytes[1];
-}
-
-fn calc_word_sign_bit(val: u16) -> bool {
-    (val as i16) < 0
-}
-
-fn calc_byte_sign_bit(val: u8) -> bool {
-    (val as i8) < 0
-}
-
-fn calc_word_carry_bit(a: u16, b: u16) -> bool {
-    let dword_val = (a as u32) + (b as u32);
-    (dword_val & 0xFF0000) != 0
-}
-
-fn calc_byte_carry_bit(a: u8, b: u8) -> bool {
-    let dword_val = (a as u16) + (b as u16);
-    (dword_val & 0xFF00) != 0
-}
-
-fn calc_add_word_flags(flags: &mut u16, left: u16, right: u16, result: u16) {
-    flags.set_bit(CARRY_FLAG, calc_word_carry_bit(left, right));
-    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == 0);
-}
-
-fn calc_add_byte_flags(flags: &mut u16, left: u8, right: u8, result: u8) {
-    flags.set_bit(CARRY_FLAG, calc_byte_carry_bit(left, right));
-    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == 0);
-}
-
-fn calc_sub_word_flags(flags: &mut u16, left: u16, right: u16, result: u16) {
-    flags.set_bit(CARRY_FLAG, left < right);
-    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == 0);
-}
-
-fn calc_sub_byte_flags(flags: &mut u16, left: u8, right: u8, result: u8) {
-    flags.set_bit(CARRY_FLAG, left < right);
-    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == 0);
-}
-
-fn inc_reg(reg: &mut u16, flags: &mut u16) -> u16 {
-    *reg = (*reg).wrapping_add(1);
-    flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(*reg));
-    1
-}
-
-fn dec_reg(reg: &mut u16, flags: &mut u16) -> u16 {
-    *reg = (*reg).wrapping_sub(1);
-    flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(*reg));
-    1
-}
-
-fn inc_byte(reg: &mut u8, flags: &mut u16) -> u16 {
-    *reg = (*reg).wrapping_add(1);
-    flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(*reg));
-    1
-}
-
-fn dec_byte(reg: &mut u8, flags: &mut u16) -> u16 {
-    *reg = (*reg).wrapping_sub(1);
-    flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(*reg));
-    1
-}
-
-fn push_reg(mem: &mut [u8], sp: &mut u16, reg: u16) -> u16 {
-    *sp -= 2;
-    write_word(mem, *sp as usize, reg);
-    1
-}
-
-fn pop_reg(mem: &[u8], sp: &mut u16, reg: &mut u16) -> u16 {
-    *reg = read_word(mem, *sp as usize);
-    *sp += 2;
-    1
-}
-
-fn swap_reg(ax: &mut u16, xx: &mut u16) -> u16 {
-    mem::swap(ax, xx);
-    1
-}
-
-fn mov_reg_imm_word(reg: &mut u16, imm: u16) -> u16 {
-    *reg = imm;
-    3
-}
-fn mov_reg_imm_byte(reg: &mut u16, imm: u8, high: bool) -> u16 {
-    if high {
-        (*reg).set_high(imm);
-    } else {
-        (*reg).set_low(imm);
-    }
-    2
-}
-
-fn parse_mod_rm_byte(modrm: u8) -> (u8, u8, u8) {
-    // Mod R/M byte format
-    // 00 | 000 | 000
-    // Mod  Reg   R/M
-    let id_mod = (modrm & 0xC0) >> 6;
-    let id_reg = (modrm & 0x38) >> 3;
-    let id_rm = modrm & 0x07;
-    (id_mod, id_reg, id_rm)
 }
 
 impl Cpu {
@@ -261,10 +148,16 @@ sf: {}",
         let opcode = self.mem[self.ip as usize];
         match reason {
             CpuBreakReason::Breakpoint => {
-                println!("Breakpoint hit at 0x{:X} while processing opcode 0x{:X}", self.ip, opcode);
+                println!(
+                    "Breakpoint hit at 0x{:X} while processing opcode 0x{:X}",
+                    self.ip, opcode
+                );
             }
             CpuBreakReason::Panic(msg) => {
-                println!("Cpu panicked at 0x{:X} while processing opcode 0x{:X}: {}", self.ip, opcode, msg);
+                println!(
+                    "Cpu panicked at 0x{:X} while processing opcode 0x{:X}: {}",
+                    self.ip, opcode, msg
+                );
             }
         }
         self.dump_registers();
@@ -1767,43 +1660,6 @@ mod tests {
         assert!(cpu.flag.get_bit(CARRY_FLAG));
         cpu.do_cycle();
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
-    }
-
-    #[test]
-    fn mem_read_write_test() {
-        let mut mem = vec![0; TEST_MEM_SIZE];
-        mem[0x44] = 0xFF;
-        mem[0x45] = 0x13;
-        mem[0x46] = 0x33;
-        mem[0x47] = 0x12;
-
-        assert_eq!(read_word(&mem, 0x45), 0x3313);
-        write_word(&mut mem, 0x45, 0x1014);
-        assert_eq!(mem[0x44], 0xFF);
-        assert_eq!(mem[0x45], 0x14);
-        assert_eq!(mem[0x46], 0x10);
-        assert_eq!(mem[0x47], 0x12);
-        assert_eq!(read_word(&mem, 0x45), 0x1014);
-    }
-
-    #[test]
-    fn calc_word_sign_bit_test() {
-        assert!(calc_word_sign_bit(0xFFFF));
-        assert!(!calc_word_sign_bit(0x0000));
-        assert!(calc_word_sign_bit(0x8000));
-        assert!(!calc_word_sign_bit(0x1000));
-        assert!(!calc_word_sign_bit(0x0001));
-        assert!(!calc_word_sign_bit(0x0008));
-        assert!(!calc_word_sign_bit(0x0080));
-        assert!(!calc_word_sign_bit(0x0800));
-    }
-
-    #[test]
-    fn calc_byte_sign_bit_test() {
-        assert!(!calc_byte_sign_bit(0x01));
-        assert!(!calc_byte_sign_bit(0x08));
-        assert!(calc_byte_sign_bit(0x80));
-        assert!(!calc_byte_sign_bit(0x10));
     }
 
     // Instruction tests

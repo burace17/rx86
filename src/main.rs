@@ -1,5 +1,7 @@
 mod bits;
 mod cpu;
+mod instructions;
+mod memory;
 use cpu::Cpu;
 
 use std::env;
