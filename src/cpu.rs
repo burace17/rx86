@@ -1,7 +1,6 @@
 use crate::bits::Bits;
 use std::io;
 use std::mem;
-use std::process;
 static CARRY_FLAG: u16 = 0;
 // static PARITY_FLAG: u16 = 2;
 // static AUX_CARRY_FLAG: u16 = 4;
@@ -179,11 +178,10 @@ impl Cpu {
 
     pub fn emulate(&mut self) {
         loop {
-            // println!("--------------");
-            // println!("starting cycle");
-            // self.dump_registers();
-            // println!("--------------");
-            self.do_cycle();
+            let should_continue_emulation = self.do_cycle();
+            if !should_continue_emulation {
+                break;
+            }
         }
     }
 
@@ -196,22 +194,19 @@ bp: 0x{:X}    sp: 0x{:X}
 ip: 0x{:X}
 cf: {}        zf: {}
 sf: {}",
-            self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp, self.ip,
+            self.ax,
+            self.bx,
+            self.cx,
+            self.dx,
+            self.si,
+            self.di,
+            self.bp,
+            self.sp,
+            self.ip,
             self.flag.get_bit(CARRY_FLAG),
             self.flag.get_bit(ZERO_FLAG),
             self.flag.get_bit(SIGN_FLAG)
         );
-    }
-
-    pub fn halt_cpu(&self) -> ! {
-        println!("----------------------");
-        println!("CPU halted");
-        println!("----------------------");
-        self.dump_registers();
-        println!("----------------------");
-        println!();
-        self.dump_video_ram();
-        process::exit(0);
     }
 
     pub fn dump_video_ram(&self) {
@@ -232,7 +227,7 @@ sf: {}",
             }
         }
     }
-    
+
     fn debug_read_memory_command(&self, input: &str, read_word: bool) {
         let parts: Vec<&str> = input.split_whitespace().collect();
         if parts.len() == 2 {
@@ -248,13 +243,16 @@ sf: {}",
     }
 
     fn handle_breakpoint(&mut self, opcode: u8) {
-        println!("Stopped at: {:X}. Next instruction: 0x{:X}", self.ip, opcode);
+        println!(
+            "Stopped at: {:X}. Next instruction: 0x{:X}",
+            self.ip, opcode
+        );
         self.dump_registers();
         self.dump_video_ram();
         println!();
         loop {
             let mut input = String::new();
-            if let Ok(_) = io::stdin().read_line(&mut input) {
+            if io::stdin().read_line(&mut input).is_ok() {
                 match input.trim() {
                     "g" => {
                         self.step_mode = false;
@@ -264,8 +262,12 @@ sf: {}",
                         self.step_mode = true;
                         break;
                     }
-                    _ if input.contains("read_word") => self.debug_read_memory_command(&input, true),
-                    _ if input.contains("read_byte") => self.debug_read_memory_command(&input, false),
+                    _ if input.contains("read_word") => {
+                        self.debug_read_memory_command(&input, true)
+                    }
+                    _ if input.contains("read_byte") => {
+                        self.debug_read_memory_command(&input, false)
+                    }
                     _ => println!("Unknown debug command. Type 'g' to continue"),
                 }
             } else {
@@ -729,7 +731,7 @@ sf: {}",
         2
     }
 
-    pub fn do_cycle(&mut self) {
+    pub fn do_cycle(&mut self) -> bool {
         let opcode = self.mem[self.ip as usize];
         //println!("opcode: 0x{:X}, ip: 0x{:X}", opcode, self.ip);
         //self.dump_registers();
@@ -737,6 +739,7 @@ sf: {}",
             self.handle_breakpoint(opcode);
         }
 
+        let mut should_continue_emulation = true;
         let ip_increment = match opcode {
             0x00 => self.do_byte_inst(|rm, reg, flag| {
                 let old = *rm;
@@ -1228,7 +1231,10 @@ sf: {}",
                 self.ip = self.ip.wrapping_add_signed(sval as i16);
                 2
             }
-            0xF4 => self.halt_cpu(),
+            0xF4 => {
+                should_continue_emulation = false;
+                0
+            }
             0xF8 => {
                 self.flag.set_bit(CARRY_FLAG, false);
                 1
@@ -1251,6 +1257,7 @@ sf: {}",
             }
         };
         self.ip += ip_increment;
+        should_continue_emulation
     }
 }
 
@@ -1803,14 +1810,14 @@ mod tests {
         cpu.mem[0..5].copy_from_slice(&[0x80, 0x06, 0x34, 0x12, 0x0A]);
         cpu.mem[0x1234] = 0x0A;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.mem[0x1234], 0x14);
         assert_eq!(cpu.ip, 5);
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+
     #[test]
     fn test_80_add_reg_overflow() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
@@ -1818,7 +1825,7 @@ mod tests {
         cpu.mem[0..3].copy_from_slice(&[0x80, 0xC0, 0x01]);
         cpu.ax = 0x00FF;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 3);
         assert!(cpu.flag.get_bit(CARRY_FLAG));
@@ -1833,7 +1840,7 @@ mod tests {
         cpu.mem[0..3].copy_from_slice(&[0x80, 0xEB, 0x01]);
         cpu.bx = 0x0000;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.bx, 0x00FF);
         assert_eq!(cpu.ip, 3);
         assert!(cpu.flag.get_bit(CARRY_FLAG));
@@ -1848,7 +1855,7 @@ mod tests {
         cpu.mem[0..5].copy_from_slice(&[0x80, 0x3E, 0x34, 0x12, 0x12]);
         cpu.mem[0x1234] = 0x12;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.ip, 5);
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
         assert!(cpu.flag.get_bit(ZERO_FLAG));
@@ -1862,7 +1869,7 @@ mod tests {
         cpu.mem[0..2].copy_from_slice(&[0x30, 0xC9]);
         cpu.cx = 0x00AA;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.cx, 0x0000);
         assert_eq!(cpu.ip, 2);
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
@@ -1877,14 +1884,14 @@ mod tests {
         cpu.mem[0..4].copy_from_slice(&[0x81, 0xC0, 0x01, 0x00]);
         cpu.ax = 0xFFFF;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 4);
         assert!(cpu.flag.get_bit(CARRY_FLAG));
         assert!(cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+
     #[test]
     fn test_81_cmp_reg_signed() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
@@ -1892,14 +1899,14 @@ mod tests {
         cpu.mem[0..4].copy_from_slice(&[0x81, 0xFB, 0x00, 0x80]);
         cpu.bx = 0x7FFF;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.bx, 0x7FFF); // Unchanged
         assert_eq!(cpu.ip, 4);
         assert!(cpu.flag.get_bit(CARRY_FLAG));
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+
     #[test]
     fn test_81_sub_mem_negative() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
@@ -1914,7 +1921,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+
     #[test]
     fn test_81_add_max_signed() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
@@ -1922,7 +1929,7 @@ mod tests {
         cpu.mem[0..4].copy_from_slice(&[0x81, 0xC0, 0xFF, 0x7F]);
         cpu.ax = 0x0001;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.ax, 0x8000);
         assert_eq!(cpu.ip, 4);
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
@@ -1944,7 +1951,7 @@ mod tests {
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+
     #[test]
     fn test_82_add_al_positive() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
@@ -1952,7 +1959,7 @@ mod tests {
         cpu.mem[0..3].copy_from_slice(&[0x82, 0xC0, 0x01]);
         cpu.ax = 0x0001; // AL = 0x01
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.ax, 0x0002); // AL = 0x02
         assert_eq!(cpu.ip, 3);
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
@@ -2004,14 +2011,14 @@ mod tests {
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+
     #[test]
     fn test_82_sub_bl_borrow() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.mem[0..3].copy_from_slice(&[0x82, 0xEB, 0xFF]);
         cpu.bx = 0x0005; // BL = 0x05
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.bx, 0x0006); // BL = 0x06 (5 - (-1))
         assert_eq!(cpu.ip, 3);
         assert!(cpu.flag.get_bit(CARRY_FLAG));
@@ -2062,14 +2069,14 @@ mod tests {
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+
     #[test]
     fn test_83_add_ax_overflow() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.mem[0..3].copy_from_slice(&[0x83, 0xC0, 0x01]);
         cpu.ax = 0xFFFF;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 3);
         assert!(cpu.flag.get_bit(CARRY_FLAG));
@@ -2136,14 +2143,14 @@ mod tests {
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+
     #[test]
     fn test_83_sub_ax_underflow() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.mem[0..3].copy_from_slice(&[0x83, 0xE8, 0x80]);
         cpu.ax = 0x0000;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.ax, 0x0080); // 0 - (-128) = 128
         assert_eq!(cpu.ip, 3);
         assert!(cpu.flag.get_bit(CARRY_FLAG));
@@ -2165,14 +2172,14 @@ mod tests {
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+
     #[test]
     fn test_83_sub_bx_negative() {
         let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
         cpu.mem[0..3].copy_from_slice(&[0x83, 0xEB, 0xFF]);
         cpu.bx = 0x0005;
         cpu.do_cycle();
-        
+
         assert_eq!(cpu.bx, 0x0006); // 5 - (-1) = 6
         assert_eq!(cpu.ip, 3);
         assert!(cpu.flag.get_bit(CARRY_FLAG));
@@ -2238,5 +2245,17 @@ mod tests {
         assert!(!cpu.flag.get_bit(CARRY_FLAG));
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    // This is one big test that runs the program from: https://codegolf.stackexchange.com/questions/11880/emulate-an-intel-8086-cpu
+    // and verifies it matches the reference output
+    #[test]
+    fn test_codegolf_reference_output() {
+        let reference_output = include_bytes!("../test/test_codegolf_reference_output.bin");
+        let reference_program = include_bytes!("../test/codegolf_reference_program");
+        let mut cpu = Cpu::new_with_mem_size(false, TEST_MEM_SIZE);
+        cpu.mem[0..reference_program.len()].copy_from_slice(reference_program);
+        cpu.emulate();
+        assert_eq!(cpu.mem[0x8000..0x87D0], *reference_output);
     }
 }
