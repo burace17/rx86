@@ -27,7 +27,17 @@ pub struct Cpu {
     mem: Box<[u8]>,
 
     pub breakpoints: Vec<u16>,
-    pub step_mode: bool,
+}
+
+enum CpuBreakReason {
+    Breakpoint,
+    Panic(String),
+}
+
+enum CpuBreakResult {
+    Continue,
+    StepOver,
+    Abort,
 }
 
 fn read_word(mem: &[u8], loc: usize) -> u16 {
@@ -165,7 +175,6 @@ impl Cpu {
             flag: 0,
             mem,
             breakpoints: Vec::new(),
-            step_mode: false,
         }
     }
 
@@ -175,7 +184,15 @@ impl Cpu {
     }
 
     pub fn emulate(&mut self) {
+        let mut break_on_next = false;
         loop {
+            if break_on_next || self.breakpoints.contains(&self.ip) {
+                match self.debug_break(CpuBreakReason::Breakpoint) {
+                    CpuBreakResult::Continue => break_on_next = false,
+                    CpuBreakResult::StepOver => break_on_next = true,
+                    CpuBreakResult::Abort => break,
+                }
+            }
             let should_continue_emulation = self.do_cycle();
             if !should_continue_emulation {
                 break;
@@ -240,24 +257,30 @@ sf: {}",
         }
     }
 
-    fn handle_breakpoint(&mut self, opcode: u8) {
-        println!(
-            "Stopped at: {:X}. Next instruction: 0x{:X}",
-            self.ip, opcode
-        );
+    fn debug_break(&self, reason: CpuBreakReason) -> CpuBreakResult {
+        let opcode = self.mem[self.ip as usize];
+        match reason {
+            CpuBreakReason::Breakpoint => {
+                println!("Breakpoint hit at 0x{:X} while processing opcode 0x{:X}", self.ip, opcode);
+            }
+            CpuBreakReason::Panic(msg) => {
+                println!("Cpu panicked at 0x{:X} while processing opcode 0x{:X}: {}", self.ip, opcode, msg);
+            }
+        }
         self.dump_registers();
         self.dump_video_ram();
         println!();
+        let result;
         loop {
             let mut input = String::new();
             if io::stdin().read_line(&mut input).is_ok() {
                 match input.trim() {
                     "g" => {
-                        self.step_mode = false;
+                        result = CpuBreakResult::Continue;
                         break;
                     }
                     "n" => {
-                        self.step_mode = true;
+                        result = CpuBreakResult::StepOver;
                         break;
                     }
                     _ if input.contains("read_word") => {
@@ -270,15 +293,15 @@ sf: {}",
                 }
             } else {
                 println!("Couldn't read from stdin");
+                result = CpuBreakResult::Abort;
                 break;
             }
         }
+        result
     }
 
     fn cpu_panic(&self, msg: &str) -> ! {
-        println!("----------------------");
-        self.dump_video_ram();
-        self.dump_registers();
+        self.debug_break(CpuBreakReason::Panic(msg.to_owned()));
         panic!("{}", msg);
     }
 
@@ -722,11 +745,6 @@ sf: {}",
 
     pub fn do_cycle(&mut self) -> bool {
         let opcode = self.mem[self.ip as usize];
-        //println!("opcode: 0x{:X}, ip: 0x{:X}", opcode, self.ip);
-        //self.dump_registers();
-        if self.step_mode || self.breakpoints.contains(&self.ip) {
-            self.handle_breakpoint(opcode);
-        }
 
         let mut should_continue_emulation = true;
         let ip_increment = match opcode {
@@ -1240,10 +1258,7 @@ sf: {}",
                 };
             }),
 
-            inst => {
-                self.dump_registers();
-                panic!("Unknown instruction 0x{:X}", inst)
-            }
+            _ => self.cpu_panic("Unknown instruction"),
         };
         self.ip += ip_increment;
         should_continue_emulation
