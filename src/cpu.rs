@@ -38,6 +38,7 @@ pub struct Cpu {
 
 enum CpuBreakReason {
     Breakpoint,
+#[allow(unused)]
     Panic(String),
 }
 
@@ -194,6 +195,7 @@ sf: {}",
     }
 
     fn cpu_panic(&self, msg: &str) -> ! {
+        #[cfg(not(test))]
         self.debug_break(CpuBreakReason::Panic(msg.to_owned()));
         panic!("{}", msg);
     }
@@ -254,11 +256,11 @@ sf: {}",
         }
     }
 
-    // From a the mod and rm parts of the modrm byte, return the memory address and displacement
+    // From a the mod and rm parts of the modrm byte, return the memory address and instruction length so far
     fn read_address_from_modrm(&self, id_mod: u8, id_rm: u8) -> (u16, u16) {
         // Operand is a memory address.
         let ip = self.ip as usize;
-        let mut displacement = 2;
+        let mut instruction_length = 2;
         let mut address = match id_rm {
             0x00 => self.bx.wrapping_add(self.si),
             0x01 => self.bx.wrapping_add(self.di),
@@ -274,7 +276,7 @@ sf: {}",
 
         // bp uses 16 bit displacement
         if id_rm == 0x06 && id_mod == 0 {
-            displacement = 4;
+            instruction_length = 4;
         }
 
         if id_mod == 0x01 {
@@ -282,15 +284,15 @@ sf: {}",
             let mut signed_address = address as i16;
             signed_address += dc;
             address = signed_address as u16;
-            displacement = 4;
+            instruction_length = 4;
         } else if id_mod == 0x02 {
             let dw = read_word(&self.mem, ip + 2) as i16;
             let mut signed_address = address as i16;
             signed_address += dw;
             address = signed_address as u16;
-            displacement = 4;
+            instruction_length = 4;
         }
-        (address, displacement)
+        (address, instruction_length)
     }
 
     // TODO: It shouldn't be hard to generalize do_byte_inst to accomodate this use case too
