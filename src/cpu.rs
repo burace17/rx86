@@ -30,6 +30,11 @@ pub struct Cpu {
     sp: u16,
     ip: u16,
 
+    cs: u16,
+    ds: u16,
+    ss: u16,
+    es: u16,
+
     flag: u16,
     mem: Box<[u8]>,
 
@@ -60,6 +65,10 @@ impl Cpu {
             bp: 0,
             sp: 0x100,
             ip: 0,
+            cs: 0,
+            ds: 0,
+            ss: 0,
+            es: 0,
             flag: 0,
             mem,
             breakpoints: Vec::new(),
@@ -90,12 +99,13 @@ impl Cpu {
 
     pub fn dump_registers(&self) {
         println!(
-            "ax: 0x{:X}    bx: 0x{:X}
-cx: 0x{:X}    dx: 0x{:X}
-si: 0x{:X}    di: 0x{:X}
-bp: 0x{:X}    sp: 0x{:X}
+"ax: 0x{:X}    bx: 0x{:X}    cx: 0x{:X}    dx: 0x{:X}
+si: 0x{:X}    di: 0x{:X}    bp: 0x{:X}    sp: 0x{:X}
 ip: 0x{:X}
-cf: {}        zf: {}
+
+cs: 0x{:X}    ds: 0x{:X}    ss: 0x{:X}    es: 0x{:X}
+
+cf: {}     zf: {}
 sf: {}",
             self.ax,
             self.bx,
@@ -106,6 +116,10 @@ sf: {}",
             self.bp,
             self.sp,
             self.ip,
+            self.cs,
+            self.ds,
+            self.ss,
+            self.es,
             self.flag.get_bit(CARRY_FLAG),
             self.flag.get_bit(ZERO_FLAG),
             self.flag.get_bit(SIGN_FLAG)
@@ -175,6 +189,10 @@ sf: {}",
                     }
                     "n" => {
                         result = CpuBreakResult::StepOver;
+                        break;
+                    }
+                    "q" => {
+                        result = CpuBreakResult::Abort;
                         break;
                     }
                     _ if input.contains("read_word") => {
@@ -677,8 +695,8 @@ sf: {}",
                 *ax = val;
                 calc_add_word_flags(flag, old_ax, imm, val);
             }),
-            // 0x06 =>
-            // 0x07 =>
+            0x06 => push_reg(&mut self.mem, &mut self.sp, self.es),
+            0x07 => pop_reg(&mut self.mem, &mut self.sp, &mut self.es),
             0x08 => self.do_byte_inst(|rm, reg, flag| {
                 *rm |= *reg;
                 flag.set_bit(CARRY_FLAG, false);
@@ -725,6 +743,9 @@ sf: {}",
                 flag.set_bit(SIGN_FLAG, calc_word_sign_bit(val));
                 // todo clear overflow flag
             }),
+            0x0E => push_reg(&mut self.mem, &mut self.sp, self.cs),
+            // TODO: 0x0F is pop_reg for cs but only on 8086
+            0x0F => pop_reg(&mut self.mem, &mut self.sp, &mut self.cs),
             0x10 => self.do_byte_inst(|rm, reg, flag| {
                 let old = *rm;
                 let val = old.wrapping_add(*reg);
@@ -769,6 +790,8 @@ sf: {}",
                 *ax = val;
                 calc_add_word_flags(flag, old, imm + c, val); // check?
             }),
+            0x16 => push_reg(&mut self.mem, &mut self.sp, self.ss),
+            0x17 => pop_reg(&mut self.mem, &mut self.sp, &mut self.ss),
             0x18 => self.do_byte_inst(|rm, reg, flag| {
                 let old = *rm;
                 let c = flag.get_bit(CARRY_FLAG) as u8;
@@ -813,6 +836,8 @@ sf: {}",
                 *ax = val;
                 calc_add_word_flags(flag, old, imm + c, val); // check?
             }),
+            0x1E => push_reg(&mut self.mem, &mut self.sp, self.ds),
+            0x1F => pop_reg(&mut self.mem, &mut self.sp, &mut self.ds),
             0x20 => self.do_byte_inst(|rm, reg, flag| {
                 *rm &= *reg;
                 flag.set_bit(CARRY_FLAG, false);
