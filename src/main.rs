@@ -2,6 +2,8 @@ mod bits;
 mod cpu;
 mod instructions;
 mod memory;
+mod upcast;
+
 use cpu::Cpu;
 
 use std::env;

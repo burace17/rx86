@@ -1,7 +1,13 @@
+use std::ops::Add;
+
+use num_conv::{CastSigned, Extend};
+use num_traits::{Bounded, Zero};
+
 use crate::{
     bits::Bits,
     cpu::{CARRY_FLAG, SIGN_FLAG, ZERO_FLAG},
     memory::{read_word, write_word},
+    upcast::Upcast,
 };
 
 #[derive(Clone, Copy)]
@@ -43,28 +49,28 @@ pub fn is_addressing_mode(id_mod: u8) -> bool {
 pub fn inc_reg(reg: &mut u16, flags: &mut u16) -> u16 {
     *reg = (*reg).wrapping_add(1);
     flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(*reg));
+    flags.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
     1
 }
 
 pub fn dec_reg(reg: &mut u16, flags: &mut u16) -> u16 {
     *reg = (*reg).wrapping_sub(1);
     flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(*reg));
+    flags.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
     1
 }
 
 pub fn inc_byte(reg: &mut u8, flags: &mut u16) -> u16 {
     *reg = (*reg).wrapping_add(1);
     flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(*reg));
+    flags.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
     1
 }
 
 pub fn dec_byte(reg: &mut u8, flags: &mut u16) -> u16 {
     *reg = (*reg).wrapping_sub(1);
     flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(*reg));
+    flags.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
     1
 }
 
@@ -99,46 +105,49 @@ pub fn mov_reg_imm_byte(reg: &mut u16, imm: u8, high: bool) -> u16 {
     2
 }
 
-pub fn calc_word_sign_bit(val: u16) -> bool {
-    (val as i16) < 0
+pub fn calc_sign_bit<T>(val: T) -> bool
+where
+    T: CastSigned,
+    <T as CastSigned>::Signed: Zero,
+    <T as CastSigned>::Signed: PartialOrd, //   T: NumericOps,
+{
+    val.cast_signed() < T::Signed::zero()
 }
 
-pub fn calc_byte_sign_bit(val: u8) -> bool {
-    (val as i8) < 0
+pub fn calc_carry_bit<T>(a: T, b: T) -> bool
+where
+    T: Upcast + Bounded + Extend,
+    <T as Upcast>::UpcastedType: Add,
+    <T as Upcast>::UpcastedType: PartialOrd,
+    <<T as Upcast>::UpcastedType as Add>::Output: PartialOrd<<T as Upcast>::UpcastedType>,
+{
+    let sum = a.upcast() + b.upcast();
+    sum > T::max_value().upcast()
 }
 
-fn calc_word_add_carry_bit(a: u16, b: u16) -> bool {
-    let sum = a as u32 + b as u32;
-    sum > 0xFFFF
+pub fn calc_add_flags<T>(flags: &mut u16, left: T, right: T, result: T)
+where
+    T: CastSigned + Zero + PartialEq + Upcast + Bounded + Copy,
+    <T as Upcast>::UpcastedType: Add,
+    <T as Upcast>::UpcastedType: PartialOrd,
+    <<T as Upcast>::UpcastedType as Add>::Output: PartialOrd<<T as Upcast>::UpcastedType>,
+    <T as CastSigned>::Signed: Zero,
+    <T as CastSigned>::Signed: PartialOrd,
+{
+    flags.set_bit(CARRY_FLAG, calc_carry_bit(left, right));
+    flags.set_bit(SIGN_FLAG, calc_sign_bit(result));
+    flags.set_bit(ZERO_FLAG, result == T::zero());
 }
 
-fn calc_byte_add_carry_bit(a: u8, b: u8) -> bool {
-    let sum = a as u16 + b as u16;
-    sum > 0xFF
-}
-
-pub fn calc_add_word_flags(flags: &mut u16, left: u16, right: u16, result: u16) {
-    flags.set_bit(CARRY_FLAG, calc_word_add_carry_bit(left, right));
-    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == 0);
-}
-
-pub fn calc_add_byte_flags(flags: &mut u16, left: u8, right: u8, result: u8) {
-    flags.set_bit(CARRY_FLAG, calc_byte_add_carry_bit(left, right));
-    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == 0);
-}
-
-pub fn calc_sub_word_flags(flags: &mut u16, left: u16, right: u16, result: u16) {
+pub fn calc_sub_flags<T>(flags: &mut u16, left: T, right: T, result: T)
+where
+    T: CastSigned + Zero + PartialEq + PartialOrd + Upcast + Bounded + Copy,
+    <T as CastSigned>::Signed: Zero,
+    <T as CastSigned>::Signed: PartialOrd,
+{
     flags.set_bit(CARRY_FLAG, left < right);
-    flags.set_bit(SIGN_FLAG, calc_word_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == 0);
-}
-
-pub fn calc_sub_byte_flags(flags: &mut u16, left: u8, right: u8, result: u8) {
-    flags.set_bit(CARRY_FLAG, left < right);
-    flags.set_bit(SIGN_FLAG, calc_byte_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == 0);
+    flags.set_bit(SIGN_FLAG, calc_sign_bit(result));
+    flags.set_bit(ZERO_FLAG, result == T::zero());
 }
 
 #[cfg(test)]
@@ -147,21 +156,21 @@ mod tests {
 
     #[test]
     fn calc_word_sign_bit_test() {
-        assert!(calc_word_sign_bit(0xFFFF));
-        assert!(!calc_word_sign_bit(0x0000));
-        assert!(calc_word_sign_bit(0x8000));
-        assert!(!calc_word_sign_bit(0x1000));
-        assert!(!calc_word_sign_bit(0x0001));
-        assert!(!calc_word_sign_bit(0x0008));
-        assert!(!calc_word_sign_bit(0x0080));
-        assert!(!calc_word_sign_bit(0x0800));
+        assert!(calc_sign_bit(0xFFFF_u16));
+        assert!(!calc_sign_bit(0x0000_u16));
+        assert!(calc_sign_bit(0x8000_u16));
+        assert!(!calc_sign_bit(0x1000_u16));
+        assert!(!calc_sign_bit(0x0001_u16));
+        assert!(!calc_sign_bit(0x0008_u16));
+        assert!(!calc_sign_bit(0x0080_u16));
+        assert!(!calc_sign_bit(0x0800_u16));
     }
 
     #[test]
     fn calc_byte_sign_bit_test() {
-        assert!(!calc_byte_sign_bit(0x01));
-        assert!(!calc_byte_sign_bit(0x08));
-        assert!(calc_byte_sign_bit(0x80));
-        assert!(!calc_byte_sign_bit(0x10));
+        assert!(!calc_sign_bit(0x01_u8));
+        assert!(!calc_sign_bit(0x08_u8));
+        assert!(calc_sign_bit(0x80_u8));
+        assert!(!calc_sign_bit(0x10_u8));
     }
 }
