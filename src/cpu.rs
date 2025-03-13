@@ -2,7 +2,8 @@ use crate::bits::Bits;
 use crate::instructions::{
     calc_add_byte_flags, calc_add_word_flags, calc_byte_sign_bit, calc_sub_byte_flags,
     calc_sub_word_flags, calc_word_sign_bit, dec_byte, dec_reg, inc_byte, inc_reg,
-    mov_reg_imm_byte, mov_reg_imm_word, parse_mod_rm_byte, pop_reg, push_reg, swap_reg,
+    is_addressing_mode, mov_reg_imm_byte, mov_reg_imm_word, parse_mod_rm_byte, pop_reg, push_reg,
+    swap_reg, ModRmByte, RegisterOrMemory,
 };
 use crate::memory::{read_word, write_word};
 use std::io;
@@ -43,7 +44,7 @@ pub struct Cpu {
 
 enum CpuBreakReason {
     Breakpoint,
-#[allow(unused)]
+    #[allow(unused)]
     Panic(String),
 }
 
@@ -99,7 +100,7 @@ impl Cpu {
 
     pub fn dump_registers(&self) {
         println!(
-"ax: 0x{:X}    bx: 0x{:X}    cx: 0x{:X}    dx: 0x{:X}
+            "ax: 0x{:X}    bx: 0x{:X}    cx: 0x{:X}    dx: 0x{:X}
 si: 0x{:X}    di: 0x{:X}    bp: 0x{:X}    sp: 0x{:X}
 ip: 0x{:X}
 
@@ -313,74 +314,64 @@ sf: {}",
         (address, instruction_length)
     }
 
-    // TODO: It shouldn't be hard to generalize do_byte_inst to accomodate this use case too
-    // Only difference is we don't map 'reg' to a register value. grp2 instructions have specific
-    // uses for the 'reg' value.
     fn do_grp2_inst<F>(&mut self, op: F) -> u16
     where
-        F: Fn(&mut u8, u8, &mut u16),
+        F: Fn(&mut u8, &mut u8, &mut u16),
     {
-        let ip = self.ip as usize;
-        let modrm_byte = self.mem[ip + 1];
-        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
-
-        if id_mod < 0x03 {
-            let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
-            let mut rm = self.mem[address as usize];
-
-            op(&mut rm, id_reg, &mut self.flag);
-
-            self.mem[address as usize] = rm;
-            ip_increment
-        } else {
-            // Both operands are registers. Get their current values and pass to operation.
-            let mut rm = self.get_register_byte_value_by_modrm_reg_code(id_rm);
-
-            op(&mut rm, id_reg, &mut self.flag);
-
-            // Update the register values.
-            self.set_register_byte_value_by_modrm_reg_code(id_rm, rm);
-            2
-        }
+        self.do_modrm_byte_inst(op, |_, modrm_byte, _| modrm_byte.id_reg, |_, _, _| {}, 0, 2)
     }
 
     fn do_byte_inst<F>(&mut self, op: F) -> u16
     where
         F: Fn(&mut u8, &mut u8, &mut u16),
     {
-        let ip = self.ip as usize;
-        let modrm_byte = self.mem[ip + 1];
-        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
+        self.do_modrm_byte_inst(
+            op,
+            |cpu, modrm_byte, _| cpu.get_register_byte_value_by_modrm_reg_code(modrm_byte.id_reg),
+            Self::set_register_byte_value_by_modrm_reg_code,
+            0,
+            2,
+        )
+    }
 
-        if id_mod < 0x03 {
-            let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
-            let mut rm = self.mem[address as usize];
-            let mut reg = self.get_register_byte_value_by_modrm_reg_code(id_reg);
-
-            op(&mut rm, &mut reg, &mut self.flag);
-
-            self.mem[address as usize] = rm;
-            self.set_register_byte_value_by_modrm_reg_code(id_reg, reg);
-            ip_increment
-        } else {
-            // Both operands are registers. Get their current values and pass to operation.
-            let mut reg = self.get_register_byte_value_by_modrm_reg_code(id_reg);
-            let mut rm = self.get_register_byte_value_by_modrm_reg_code(id_rm);
-
-            op(&mut rm, &mut reg, &mut self.flag);
-
-            // TODO we have to look up the code twice. a bit inefficient.
-            // Update the register values.
-            self.set_register_byte_value_by_modrm_reg_code(id_reg, reg);
-            self.set_register_byte_value_by_modrm_reg_code(id_rm, rm);
-            2
-        }
+    fn do_modrm_byte_inst<F, RegGetter, RegSetter>(
+        &mut self,
+        op: F,
+        reg_getter: RegGetter,
+        reg_setter: RegSetter,
+        ip_increment_if_address: u16,
+        ip_increment_if_register: u16,
+    ) -> u16
+    where
+        F: Fn(&mut u8, &mut u8, &mut u16),
+        RegGetter: Fn(&Self, ModRmByte, u16) -> u8,
+        RegSetter: Fn(&mut Self, u8, u8),
+    {
+        self.do_modrm_inst(
+            op,
+            |cpu, reg_or_mem| match reg_or_mem {
+                RegisterOrMemory::Memory(address) => cpu.mem[address as usize],
+                RegisterOrMemory::Register(reg_code) => {
+                    cpu.get_register_byte_value_by_modrm_reg_code(reg_code)
+                }
+            },
+            |cpu, reg_or_mem, value| match reg_or_mem {
+                RegisterOrMemory::Memory(address) => cpu.mem[address as usize] = value,
+                RegisterOrMemory::Register(reg_code) => {
+                    cpu.set_register_byte_value_by_modrm_reg_code(reg_code, value)
+                }
+            },
+            reg_getter,
+            reg_setter,
+            ip_increment_if_address,
+            ip_increment_if_register,
+        )
     }
 
     fn do_opext_inst(&mut self, word_inst: bool, imm_byte: bool) -> u16 {
         let ip = self.ip as usize;
         let modrm_byte = self.mem[ip + 1];
-        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
+        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte).unpack();
 
         type ByteOpFunc = dyn Fn(&mut u8, u8, &mut u16);
         type WordOpFunc = dyn Fn(&mut u16, u16, &mut u16);
@@ -499,7 +490,7 @@ sf: {}",
             )),
         };
 
-        if id_mod < 0x03 {
+        if is_addressing_mode(id_mod) {
             // R/M is memory.
             let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
             //println!("ip increment: {:X}", ip_increment);
@@ -555,71 +546,112 @@ sf: {}",
     where
         F: Fn(&mut u16, &mut u16, &mut u16),
     {
-        let ip = self.ip as usize;
-        let modrm_byte = self.mem[ip + 1];
-        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte);
-
-        if id_mod < 0x03 {
-            let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
-
-            let mut rm_value = read_word(&self.mem, address as usize);
-            let mut reg = self.get_register_value_by_modrm_reg_code(id_reg);
-
-            op(&mut rm_value, &mut reg, &mut self.flag);
-
-            write_word(&mut self.mem, address as usize, rm_value);
-            self.set_register_value_by_modrm_reg_code(id_reg, reg);
-
-            ip_increment
-        } else {
-            // Both operands are registers. Get their current values and pass to operation.
-            let mut reg = self.get_register_value_by_modrm_reg_code(id_reg);
-            let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
-
-            op(&mut rm, &mut reg, &mut self.flag);
-
-            // TODO we have to look up the code twice. a bit inefficient.
-            // Update the register values.
-            self.set_register_value_by_modrm_reg_code(id_reg, reg);
-            self.set_register_value_by_modrm_reg_code(id_rm, rm);
-
-            2
-        }
+        self.do_modrm_word_inst(
+            op,
+            |cpu, modrm_byte, _| cpu.get_register_value_by_modrm_reg_code(modrm_byte.id_reg),
+            Self::set_register_value_by_modrm_reg_code,
+            0,
+            2,
+        )
     }
 
-    // TODO: again another function that should be possible to generalize
-    fn do_rm_imm_word_inst<F>(&mut self, op: F) -> u16
+    fn do_modrm_word_inst<F, RegGetter, RegSetter>(
+        &mut self,
+        op: F,
+        reg_getter: RegGetter,
+        reg_setter: RegSetter,
+        ip_increment_if_address: u16,
+        ip_increment_if_register: u16,
+    ) -> u16
     where
-        F: Fn(&mut u16, u16, &mut u16),
+        F: Fn(&mut u16, &mut u16, &mut u16),
+        RegGetter: Fn(&Self, ModRmByte, u16) -> u16,
+        RegSetter: Fn(&mut Self, u8, u16),
+    {
+        self.do_modrm_inst(
+            op,
+            |cpu, reg_or_mem| match reg_or_mem {
+                RegisterOrMemory::Memory(address) => read_word(&cpu.mem, address as usize),
+                RegisterOrMemory::Register(reg_code) => {
+                    cpu.get_register_value_by_modrm_reg_code(reg_code)
+                }
+            },
+            |cpu, reg_or_mem, value| match reg_or_mem {
+                RegisterOrMemory::Memory(address) => {
+                    write_word(&mut cpu.mem, address as usize, value)
+                }
+                RegisterOrMemory::Register(reg_code) => {
+                    cpu.set_register_value_by_modrm_reg_code(reg_code, value)
+                }
+            },
+            reg_getter,
+            reg_setter,
+            ip_increment_if_address,
+            ip_increment_if_register,
+        )
+    }
+
+    fn do_modrm_inst<F, InstructionDataType, RmGetter, RmSetter, RegGetter, RegSetter>(
+        &mut self,
+        op: F,
+        rm_getter: RmGetter,
+        rm_setter: RmSetter,
+        reg_getter: RegGetter,
+        reg_setter: RegSetter,
+        ip_increment_if_address: u16,
+        ip_increment_if_register: u16,
+    ) -> u16
+    where
+        F: Fn(&mut InstructionDataType, &mut InstructionDataType, &mut u16),
+        RmGetter: Fn(&Self, RegisterOrMemory) -> InstructionDataType,
+        RmSetter: Fn(&mut Self, RegisterOrMemory, InstructionDataType),
+        RegGetter: Fn(&Self, ModRmByte, u16) -> InstructionDataType,
+        RegSetter: Fn(&mut Self, u8, InstructionDataType),
     {
         let ip = self.ip as usize;
         let modrm_byte = self.mem[ip + 1];
-        let (id_mod, _, id_rm) = parse_mod_rm_byte(modrm_byte);
-        //println!("ip: {}, modrm_byte: {:X}, mod: {:X}, rm: {:X}", ip, modrm_byte, id_mod, id_rm);
-        if id_mod < 0x03 {
+        let modrm_byte = parse_mod_rm_byte(modrm_byte);
+        let (id_mod, id_reg, id_rm) = modrm_byte.unpack();
+
+        if is_addressing_mode(id_mod) {
             let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
-            let mut rm_value = read_word(&self.mem, address as usize);
-            let imm = read_word(&self.mem, ip + ip_increment as usize);
 
-            op(&mut rm_value, imm, &mut self.flag);
+            let mut rm_value = rm_getter(self, RegisterOrMemory::Memory(address));
+            let mut reg = reg_getter(self, modrm_byte, ip_increment);
 
-            write_word(&mut self.mem, address as usize, rm_value);
+            op(&mut rm_value, &mut reg, &mut self.flag);
 
-            ip_increment + 2 // adding two bytes for the immediate value
+            rm_setter(self, RegisterOrMemory::Memory(address), rm_value);
+            reg_setter(self, id_reg, reg);
+
+            ip_increment + ip_increment_if_address
         } else {
-            // Operand is a register
-            let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
-            // Immmediate value is 2 bytes after ip
-            let imm = read_word(&self.mem, ip + 2);
-            //println!("rm: {:X}, imm: {:X}", rm, imm);
+            // R/M is a register
+            let mut reg = reg_getter(self, modrm_byte, 0);
+            let mut rm = rm_getter(self, RegisterOrMemory::Register(id_rm));
 
-            op(&mut rm, imm, &mut self.flag);
+            op(&mut rm, &mut reg, &mut self.flag);
 
-            // Update the register values.
-            self.set_register_value_by_modrm_reg_code(id_rm, rm);
+            reg_setter(self, id_reg, reg);
+            rm_setter(self, RegisterOrMemory::Register(id_rm), rm);
 
-            4
+            ip_increment_if_register
         }
+    }
+
+    fn do_rm_imm_word_inst<F>(&mut self, op: F) -> u16
+    where
+        F: Fn(&mut u16, &mut u16, &mut u16),
+    {
+        let get_reg_func = |s: &Cpu, modrm_byte: ModRmByte, ip_increment| {
+            if is_addressing_mode(modrm_byte.id_mod) {
+                read_word(&s.mem, (s.ip + ip_increment) as usize)
+            } else {
+                read_word(&s.mem, (s.ip + 2) as usize)
+            }
+        };
+        // no setter required, only r/m is being modified
+        self.do_modrm_word_inst(op, get_reg_func, |_s, _id_reg, _new_val| (), 2, 4)
     }
 
     fn do_ax_inst<F>(&mut self, op: F) -> u16
@@ -1134,7 +1166,7 @@ sf: {}",
                 0
             }
             0xC7 => self.do_rm_imm_word_inst(|rm, imm, _flags| {
-                *rm = imm;
+                *rm = *imm;
             }),
             // 0xE0 => self.do_imm_inst(|ip, imm, _flags| {
 

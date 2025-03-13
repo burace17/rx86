@@ -4,14 +4,40 @@ use crate::{
     memory::{read_word, write_word},
 };
 
-pub fn parse_mod_rm_byte(modrm: u8) -> (u8, u8, u8) {
+#[derive(Clone, Copy)]
+pub struct ModRmByte {
+    pub id_mod: u8,
+    pub id_reg: u8,
+    pub id_rm: u8,
+}
+
+impl ModRmByte {
+    pub fn unpack(&self) -> (u8, u8, u8) {
+        (self.id_mod, self.id_reg, self.id_rm)
+    }
+}
+
+pub fn parse_mod_rm_byte(modrm: u8) -> ModRmByte {
     // Mod R/M byte format
     // 00 | 000 | 000
     // Mod  Reg   R/M
     let id_mod = (modrm & 0xC0) >> 6;
     let id_reg = (modrm & 0x38) >> 3;
     let id_rm = modrm & 0x07;
-    (id_mod, id_reg, id_rm)
+    ModRmByte {
+        id_mod,
+        id_reg,
+        id_rm,
+    }
+}
+
+pub enum RegisterOrMemory {
+    Register(u8),
+    Memory(u16),
+}
+
+pub fn is_addressing_mode(id_mod: u8) -> bool {
+    id_mod != 0b11
 }
 
 pub fn inc_reg(reg: &mut u16, flags: &mut u16) -> u16 {
