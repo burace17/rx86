@@ -5,6 +5,8 @@ use crate::instructions::{
     swap_reg, ModRmByte, RegisterOrMemory,
 };
 use crate::memory::{read_word, write_word};
+use crate::operations;
+use crate::operations::swap_args;
 use std::io;
 use std::mem;
 
@@ -692,26 +694,10 @@ sf: {}",
 
         let mut should_continue_emulation = true;
         let ip_increment = match opcode {
-            0x00 => self.do_byte_inst(|rm, reg, flag| {
-                let old = *rm;
-                *rm = old.wrapping_add(*reg);
-                calc_add_flags(flag, old, *reg, *rm);
-            }),
-            0x01 => self.do_word_inst(|rm, reg, flag| {
-                let old = *rm;
-                *rm = old.wrapping_add(*reg);
-                calc_add_flags(flag, old, *reg, *rm);
-            }),
-            0x02 => self.do_byte_inst(|rm, reg, flag| {
-                let old = *reg;
-                *reg = old.wrapping_add(*rm);
-                calc_add_flags(flag, old, *rm, *reg);
-            }),
-            0x03 => self.do_word_inst(|rm, reg, flag| {
-                let old = *reg;
-                *reg = old.wrapping_add(*rm);
-                calc_add_flags(flag, old, *rm, *reg);
-            }),
+            0x00 => self.do_byte_inst(operations::add),
+            0x01 => self.do_word_inst(operations::add),
+            0x02 => self.do_byte_inst(swap_args(operations::add)),
+            0x03 => self.do_word_inst(swap_args(operations::add)),
             0x04 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
                 let imm = mem[(ip + 1) as usize];
                 let al = ax.get_low();
@@ -727,35 +713,11 @@ sf: {}",
                 calc_add_flags(flag, old_ax, imm, val);
             }),
             0x06 => push_reg(&mut self.mem, &mut self.sp, self.es),
-            0x07 => pop_reg(&mut self.mem, &mut self.sp, &mut self.es),
-            0x08 => self.do_byte_inst(|rm, reg, flag| {
-                *rm |= *reg;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
-                // todo clear overflow flag
-            }),
-            0x09 => self.do_word_inst(|rm, reg, flag| {
-                *rm |= *reg;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
-                // todo clear overflow flag
-            }),
-            0x0A => self.do_byte_inst(|rm, reg, flag| {
-                *reg |= *rm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *reg == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
-                // todo clear overflow flag
-            }),
-            0x0B => self.do_word_inst(|rm, reg, flag| {
-                *reg |= *rm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *reg == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
-                // todo clear overflow flag
-            }),
+            0x07 => pop_reg(&self.mem, &mut self.sp, &mut self.es),
+            0x08 => self.do_byte_inst(operations::bitwise_or),
+            0x09 => self.do_word_inst(operations::bitwise_or),
+            0x0A => self.do_byte_inst(swap_args(operations::bitwise_or)),
+            0x0B => self.do_word_inst(swap_args(operations::bitwise_or)),
             0x0C => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
                 let imm = mem[(ip + 1) as usize];
                 let val = ax.get_low() | imm;
@@ -776,35 +738,11 @@ sf: {}",
             }),
             0x0E => push_reg(&mut self.mem, &mut self.sp, self.cs),
             // TODO: 0x0F is pop_reg for cs but only on 8086
-            0x0F => pop_reg(&mut self.mem, &mut self.sp, &mut self.cs),
-            0x10 => self.do_byte_inst(|rm, reg, flag| {
-                let old = *rm;
-                let val = old.wrapping_add(*reg);
-                let c = flag.get_bit(CARRY_FLAG) as u8;
-                *rm = val.wrapping_add(c);
-                calc_add_flags(flag, old, *reg, *rm); // check?
-            }),
-            0x11 => self.do_word_inst(|rm, reg, flag| {
-                let old = *rm;
-                let val = old.wrapping_add(*reg);
-                let c = flag.get_bit(CARRY_FLAG) as u16;
-                *rm = val.wrapping_add(c);
-                calc_add_flags(flag, old, *reg, *rm); // check?
-            }),
-            0x12 => self.do_byte_inst(|rm, reg, flag| {
-                let old = *reg;
-                let val = old.wrapping_add(*rm);
-                let c = flag.get_bit(CARRY_FLAG) as u8;
-                *reg = val.wrapping_add(c);
-                calc_add_flags(flag, old, *rm, *reg); // check?
-            }),
-            0x13 => self.do_word_inst(|rm, reg, flag| {
-                let old = *reg;
-                let val = old.wrapping_add(*rm);
-                let c = flag.get_bit(CARRY_FLAG) as u16;
-                *reg = val.wrapping_add(c);
-                calc_add_flags(flag, old, *rm, *reg); // check?
-            }),
+            0x0F => pop_reg(&self.mem, &mut self.sp, &mut self.cs),
+            0x10 => self.do_byte_inst(operations::add_with_carry),
+            0x11 => self.do_word_inst(operations::add_with_carry),
+            0x12 => self.do_byte_inst(swap_args(operations::add_with_carry)),
+            0x13 => self.do_word_inst(swap_args(operations::add_with_carry)),
             0x14 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
                 let imm = mem[(ip + 1) as usize];
                 let c = flag.get_bit(CARRY_FLAG) as u8;
@@ -822,35 +760,11 @@ sf: {}",
                 calc_add_flags(flag, old, imm + c, val); // check?
             }),
             0x16 => push_reg(&mut self.mem, &mut self.sp, self.ss),
-            0x17 => pop_reg(&mut self.mem, &mut self.sp, &mut self.ss),
-            0x18 => self.do_byte_inst(|rm, reg, flag| {
-                let old = *rm;
-                let c = flag.get_bit(CARRY_FLAG) as u8;
-                let val = (*reg).wrapping_add(c);
-                *rm = old.wrapping_sub(val);
-                calc_sub_flags(flag, old, val, *rm); // check?
-            }),
-            0x19 => self.do_word_inst(|rm, reg, flag| {
-                let old = *rm;
-                let c = flag.get_bit(CARRY_FLAG) as u16;
-                let val = (*reg).wrapping_add(c);
-                *rm = old.wrapping_sub(val);
-                calc_sub_flags(flag, old, val, *rm); // check?
-            }),
-            0x1A => self.do_byte_inst(|rm, reg, flag| {
-                let old = *reg;
-                let c = flag.get_bit(CARRY_FLAG) as u8;
-                let val = (*rm).wrapping_add(c);
-                *reg = old.wrapping_sub(val);
-                calc_sub_flags(flag, old, val, *reg); // check?
-            }),
-            0x1B => self.do_word_inst(|rm, reg, flag| {
-                let old = *reg;
-                let c = flag.get_bit(CARRY_FLAG) as u16;
-                let val = (*rm).wrapping_add(c);
-                *reg = old.wrapping_sub(val);
-                calc_sub_flags(flag, old, val, *reg); // check?
-            }),
+            0x17 => pop_reg(&self.mem, &mut self.sp, &mut self.ss),
+            0x18 => self.do_byte_inst(operations::sub_with_borrow),
+            0x19 => self.do_word_inst(operations::sub_with_borrow),
+            0x1A => self.do_byte_inst(swap_args(operations::sub_with_borrow)),
+            0x1B => self.do_word_inst(swap_args(operations::sub_with_borrow)),
             0x1C => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
                 let imm = mem[(ip + 1) as usize];
                 let c = flag.get_bit(CARRY_FLAG) as u8;
@@ -868,35 +782,11 @@ sf: {}",
                 calc_add_flags(flag, old, imm + c, val); // check?
             }),
             0x1E => push_reg(&mut self.mem, &mut self.sp, self.ds),
-            0x1F => pop_reg(&mut self.mem, &mut self.sp, &mut self.ds),
-            0x20 => self.do_byte_inst(|rm, reg, flag| {
-                *rm &= *reg;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
-                // todo clear overflow flag
-            }),
-            0x21 => self.do_word_inst(|rm, reg, flag| {
-                *rm &= *reg;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
-                // todo clear overflow flag
-            }),
-            0x22 => self.do_byte_inst(|rm, reg, flag| {
-                *reg &= *rm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *reg == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
-                // todo clear overflow flag
-            }),
-            0x23 => self.do_word_inst(|rm, reg, flag| {
-                *reg &= *rm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *reg == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
-                // todo clear overflow flag
-            }),
+            0x1F => pop_reg(&self.mem, &mut self.sp, &mut self.ds),
+            0x20 => self.do_byte_inst(operations::bitwise_and),
+            0x21 => self.do_word_inst(operations::bitwise_and),
+            0x22 => self.do_byte_inst(swap_args(operations::bitwise_and)),
+            0x23 => self.do_word_inst(swap_args(operations::bitwise_and)),
             0x24 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
                 let imm = mem[(ip + 1) as usize];
                 let val = ax.get_low() & imm;
@@ -915,26 +805,10 @@ sf: {}",
                 flag.set_bit(SIGN_FLAG, calc_sign_bit(val));
                 // todo clear overflow flag
             }),
-            0x28 => self.do_byte_inst(|rm, reg, flag| {
-                let old = *rm;
-                *rm = old.wrapping_sub(*reg);
-                calc_sub_flags(flag, old, *reg, *rm);
-            }),
-            0x29 => self.do_word_inst(|rm, reg, flag| {
-                let old = *rm;
-                *rm = old.wrapping_sub(*reg);
-                calc_sub_flags(flag, old, *reg, *rm);
-            }),
-            0x2A => self.do_byte_inst(|rm, reg, flag| {
-                let old = *reg;
-                *reg = old.wrapping_sub(*rm);
-                calc_sub_flags(flag, old, *rm, *reg);
-            }),
-            0x2B => self.do_word_inst(|rm, reg, flag| {
-                let old = *reg;
-                *reg = old.wrapping_sub(*rm);
-                calc_sub_flags(flag, old, *rm, *reg);
-            }),
+            0x28 => self.do_byte_inst(operations::sub),
+            0x29 => self.do_word_inst(operations::sub),
+            0x2A => self.do_byte_inst(swap_args(operations::sub)),
+            0x2B => self.do_word_inst(swap_args(operations::sub)),
             0x2C => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
                 let imm = mem[(ip + 1) as usize];
                 let al = ax.get_low();
@@ -949,34 +823,10 @@ sf: {}",
                 *ax = val;
                 calc_sub_flags(flag, old_ax, imm, val);
             }),
-            0x30 => self.do_byte_inst(|rm, reg, flag| {
-                *rm ^= *reg;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
-                // todo clear overflow flag
-            }),
-            0x31 => self.do_word_inst(|rm, reg, flag| {
-                *rm ^= *reg;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
-                // todo clear overflow flag
-            }),
-            0x32 => self.do_byte_inst(|rm, reg, flag| {
-                *reg ^= *rm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *reg == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
-                // todo clear overflow flag
-            }),
-            0x33 => self.do_word_inst(|rm, reg, flag| {
-                *reg ^= *rm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *reg == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
-                // todo clear overflow flag
-            }),
+            0x30 => self.do_byte_inst(operations::bitwise_xor),
+            0x31 => self.do_word_inst(operations::bitwise_xor),
+            0x32 => self.do_byte_inst(swap_args(operations::bitwise_xor)),
+            0x33 => self.do_word_inst(swap_args(operations::bitwise_xor)),
             0x34 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
                 let imm = mem[(ip + 1) as usize];
                 let val = ax.get_low() ^ imm;

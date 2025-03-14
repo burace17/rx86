@@ -1,13 +1,10 @@
-use std::ops::Add;
-
-use num_conv::{CastSigned, Extend};
-use num_traits::{Bounded, Zero};
+use num_traits::Zero;
 
 use crate::{
     bits::Bits,
     cpu::{CARRY_FLAG, SIGN_FLAG, ZERO_FLAG},
     memory::{read_word, write_word},
-    upcast::Upcast,
+    traits::NumericOps,
 };
 
 #[derive(Clone, Copy)]
@@ -107,19 +104,14 @@ pub fn mov_reg_imm_byte(reg: &mut u16, imm: u8, high: bool) -> u16 {
 
 pub fn calc_sign_bit<T>(val: T) -> bool
 where
-    T: CastSigned,
-    <T as CastSigned>::Signed: Zero,
-    <T as CastSigned>::Signed: PartialOrd, //   T: NumericOps,
+    T: NumericOps,
 {
     val.cast_signed() < T::Signed::zero()
 }
 
 pub fn calc_carry_bit<T>(a: T, b: T) -> bool
 where
-    T: Upcast + Bounded + Extend,
-    <T as Upcast>::UpcastedType: Add,
-    <T as Upcast>::UpcastedType: PartialOrd,
-    <<T as Upcast>::UpcastedType as Add>::Output: PartialOrd<<T as Upcast>::UpcastedType>,
+    T: NumericOps,
 {
     let sum = a.upcast() + b.upcast();
     sum > T::max_value().upcast()
@@ -127,12 +119,7 @@ where
 
 pub fn calc_add_flags<T>(flags: &mut u16, left: T, right: T, result: T)
 where
-    T: CastSigned + Zero + PartialEq + Upcast + Bounded + Copy,
-    <T as Upcast>::UpcastedType: Add,
-    <T as Upcast>::UpcastedType: PartialOrd,
-    <<T as Upcast>::UpcastedType as Add>::Output: PartialOrd<<T as Upcast>::UpcastedType>,
-    <T as CastSigned>::Signed: Zero,
-    <T as CastSigned>::Signed: PartialOrd,
+    T: NumericOps,
 {
     flags.set_bit(CARRY_FLAG, calc_carry_bit(left, right));
     flags.set_bit(SIGN_FLAG, calc_sign_bit(result));
@@ -141,9 +128,7 @@ where
 
 pub fn calc_sub_flags<T>(flags: &mut u16, left: T, right: T, result: T)
 where
-    T: CastSigned + Zero + PartialEq + PartialOrd + Upcast + Bounded + Copy,
-    <T as CastSigned>::Signed: Zero,
-    <T as CastSigned>::Signed: PartialOrd,
+    T: NumericOps,
 {
     flags.set_bit(CARRY_FLAG, left < right);
     flags.set_bit(SIGN_FLAG, calc_sign_bit(result));

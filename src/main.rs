@@ -2,7 +2,8 @@ mod bits;
 mod cpu;
 mod instructions;
 mod memory;
-mod upcast;
+mod operations;
+mod traits;
 
 use cpu::Cpu;
 
