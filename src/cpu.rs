@@ -2014,6 +2014,85 @@ mod tests {
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
+    
+    #[test]
+fn test_sbb_0x1c_subtract_with_borrow() {
+    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+    // Instruction: SBB AL, 0xFF (no borrow)
+    cpu.mem[0..2].copy_from_slice(&[0x1C, 0xFF]);
+    cpu.ax.set_low(0x01);
+    cpu.flag.set_bit(CARRY_FLAG, false); // No borrow
+    cpu.do_cycle();
+
+    assert_eq!(cpu.ax.get_low(), 0x00);
+    assert_eq!(cpu.ip, 3);
+    assert!(!cpu.flag.get_bit(CARRY_FLAG));
+    assert!(cpu.flag.get_bit(ZERO_FLAG));
+    assert!(!cpu.flag.get_bit(SIGN_FLAG));
+}
+
+#[test]
+fn test_sbb_0x1c_subtract_with_borrow_carry() {
+    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+    // Instruction: SBB AL, 0xFF (with borrow)
+    cpu.mem[0..2].copy_from_slice(&[0x1C, 0xFF]);
+    cpu.flag.set_bit(CARRY_FLAG, true); // Borrow set
+    cpu.do_cycle();
+
+    assert_eq!(cpu.ax.get_low(), 0xFF);
+    assert_eq!(cpu.ip, 3);
+    assert!(cpu.flag.get_bit(CARRY_FLAG));
+    assert!(!cpu.flag.get_bit(ZERO_FLAG));
+    assert!(cpu.flag.get_bit(SIGN_FLAG));
+}
+
+#[test]
+fn test_sbb_0x1d_subtract_word_with_borrow() {
+    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+    // Instruction: SBB AX, 0xFFFF (no borrow)
+    cpu.mem[0..3].copy_from_slice(&[0x1D, 0xFF, 0xFF]);
+    cpu.ax = 0x0001;
+    cpu.flag.set_bit(CARRY_FLAG, false); // No borrow
+    cpu.do_cycle();
+
+    assert_eq!(cpu.ax, 0x0000);
+    assert_eq!(cpu.ip, 4);
+    assert!(!cpu.flag.get_bit(CARRY_FLAG));
+    assert!(cpu.flag.get_bit(ZERO_FLAG));
+    assert!(!cpu.flag.get_bit(SIGN_FLAG));
+}
+
+#[test]
+fn test_sbb_0x1d_subtract_word_with_borrow_carry() {
+    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+    // Instruction: SBB AX, 0xFFFF (with borrow)
+    cpu.mem[0..3].copy_from_slice(&[0x1D, 0xFF, 0xFF]);
+    cpu.ax = 0x0000;
+    cpu.flag.set_bit(CARRY_FLAG, true); // Borrow set
+    cpu.do_cycle();
+
+    assert_eq!(cpu.ax, 0x00FF);
+    assert_eq!(cpu.ip, 4);
+    assert!(cpu.flag.get_bit(CARRY_FLAG));
+    assert!(!cpu.flag.get_bit(ZERO_FLAG));
+    assert!(cpu.flag.get_bit(SIGN_FLAG));
+}
+
+#[test]
+fn test_sbb_0x1c_subtract_with_borrow_zero_result() {
+    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+    // Instruction: SBB AL, 0x01 (no borrow)
+    cpu.mem[0..2].copy_from_slice(&[0x1C, 0x01]);
+    cpu.ax.set_low(0x01);
+    cpu.flag.set_bit(CARRY_FLAG, false); // No borrow
+    cpu.do_cycle();
+
+    assert_eq!(cpu.ax.get_low(), 0x00);
+    assert_eq!(cpu.ip, 3);
+    assert!(!cpu.flag.get_bit(CARRY_FLAG));
+    assert!(cpu.flag.get_bit(ZERO_FLAG));
+    assert!(!cpu.flag.get_bit(SIGN_FLAG));
+}
 
     // This is one big test that runs the program from: https://codegolf.stackexchange.com/questions/11880/emulate-an-intel-8086-cpu
     // and verifies it matches the reference output
