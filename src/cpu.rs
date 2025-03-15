@@ -5,8 +5,8 @@ use crate::instructions::{
     RegisterOrMemory,
 };
 use crate::memory::{read_word, write_word};
+use crate::operations;
 use crate::operations::swap_args;
-use crate::operations::{self, only_flags};
 use crate::traits::NumericOps;
 use bitflags::bitflags;
 use std::io;
@@ -667,12 +667,12 @@ sf: {:?}",
             0x33 => self.do_word_inst(swap_args(operations::bitwise_xor)),
             0x34 => self.do_ax_byte_inst(operations::bitwise_xor),
             0x35 => self.do_ax_word_inst(operations::bitwise_xor),
-            0x38 => self.do_byte_inst(only_flags(operations::sub)),
-            0x39 => self.do_word_inst(only_flags(operations::sub)),
-            0x3A => self.do_byte_inst(swap_args(only_flags(operations::sub))),
-            0x3B => self.do_word_inst(swap_args(only_flags(operations::sub))),
-            0x3C => self.do_ax_byte_inst(only_flags(operations::sub)),
-            0x3D => self.do_ax_word_inst(only_flags(operations::sub)),
+            0x38 => self.do_byte_inst(operations::cmp),
+            0x39 => self.do_word_inst(operations::cmp),
+            0x3A => self.do_byte_inst(swap_args(operations::cmp)),
+            0x3B => self.do_word_inst(swap_args(operations::cmp)),
+            0x3C => self.do_ax_byte_inst(operations::cmp),
+            0x3D => self.do_ax_word_inst(operations::cmp),
             0x40 => inc_reg(&mut self.ax, &mut self.flag),
             0x41 => inc_reg(&mut self.cx, &mut self.flag),
             0x42 => inc_reg(&mut self.dx, &mut self.flag),
