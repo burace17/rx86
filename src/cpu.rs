@@ -1,12 +1,13 @@
 use crate::bits::Bits;
 use crate::instructions::{
-    calc_add_flags, calc_sign_bit, calc_sub_flags, dec_byte, dec_reg, inc_byte, inc_reg,
-    is_addressing_mode, jmp_if_any_set, jmp_if_none_set, mov_reg_imm_byte, mov_reg_imm_word,
-    parse_mod_rm_byte, pop_reg, push_reg, swap_reg, ModRmByte, RegisterOrMemory,
+    dec_byte, dec_reg, inc_byte, inc_reg, is_addressing_mode, jmp_if_any_set, jmp_if_none_set,
+    mov_reg_imm_byte, mov_reg_imm_word, parse_mod_rm_byte, pop_reg, push_reg, swap_reg, ModRmByte,
+    RegisterOrMemory,
 };
 use crate::memory::{read_word, write_word};
 use crate::operations::swap_args;
 use crate::operations::{self, only_flags};
+use crate::traits::NumericOps;
 use bitflags::bitflags;
 use std::io;
 use std::mem;
@@ -379,151 +380,54 @@ sf: {:?}",
         )
     }
 
+    fn get_opext_group1_inst<T>(&self, id_reg: u8) -> impl Fn(&mut T, &mut T, &mut CpuFlags)
+    where
+        T: NumericOps,
+    {
+        match id_reg {
+            0x00 => operations::add,
+            0x01 => operations::bitwise_or,
+            0x02 => operations::add_with_carry,
+            0x03 => operations::sub_with_borrow,
+            0x04 => operations::bitwise_and,
+            0x05 => operations::sub,
+            0x06 => operations::bitwise_xor,
+            0x07 => operations::cmp,
+            reg => self.cpu_panic(&format!("Opext instruction: failed to parse REG: {}", reg)),
+        }
+    }
+
     fn do_opext_inst(&mut self, word_inst: bool, imm_byte: bool) -> u16 {
         let ip = self.ip as usize;
         let modrm_byte = self.mem[ip + 1];
         let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte).unpack();
-
-        type ByteOpFunc = dyn Fn(&mut u8, u8, &mut CpuFlags);
-        type WordOpFunc = dyn Fn(&mut u16, u16, &mut CpuFlags);
-
-        let byte_op: Box<ByteOpFunc> = match id_reg {
-            0x00 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
-                // self.cpu_debug_msg("ADD Eb, Ib");
-                let old = *rm;
-                *rm = old.wrapping_add(imm);
-                calc_add_flags(flag, old, imm, *rm);
-            }),
-            0x01 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
-                // self.cpu_debug_msg("OR Eb, Ib");
-                *rm |= imm;
-                flag.remove(CpuFlags::CARRY);
-                flag.set(CpuFlags::ZERO, *rm == 0);
-                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-            }),
-            0x02 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
-                // self.cpu_debug_msg("ADC Eb, Ib");
-                let old = *rm;
-                let val = old.wrapping_add(imm);
-                let c = flag.contains(CpuFlags::CARRY) as u8;
-                *rm = val.wrapping_add(c);
-                calc_add_flags(flag, old, imm, *rm); // check?
-            }),
-            0x03 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
-                //self.cpu_debug_msg("SBB Eb, Ib");
-                let old = *rm;
-                let c = flag.contains(CpuFlags::CARRY) as u8;
-                let val = imm.wrapping_add(c);
-                *rm = val.wrapping_sub(c);
-                calc_sub_flags(flag, old, val, *rm); // check?
-            }),
-            0x04 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
-                //self.cpu_debug_msg("AND Eb, Ib");
-                *rm &= imm;
-                flag.remove(CpuFlags::CARRY);
-                flag.set(CpuFlags::ZERO, *rm == 0);
-                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-            }),
-            0x05 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
-                //self.cpu_debug_msg("SUB Eb, Ib");
-                let old = *rm;
-                *rm = old.wrapping_sub(imm);
-                calc_sub_flags(flag, old, imm, *rm);
-            }),
-            0x06 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
-                //self.cpu_debug_msg("XOR Eb, Ib");
-                *rm ^= imm;
-                flag.remove(CpuFlags::CARRY);
-                flag.set(CpuFlags::ZERO, *rm == 0);
-                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-            }),
-            0x07 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
-                //self.cpu_debug_msg("CMP Eb, Ib");
-                let val = (*rm).wrapping_sub(imm);
-                calc_sub_flags(flag, *rm, imm, val);
-            }),
-            reg => self.cpu_panic(&format!(
-                "Opext byte instruction: failed to parse REG: {}",
-                reg
-            )),
-        };
-
-        let word_op: Box<WordOpFunc> = match id_reg {
-            0x00 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
-                let old = *rm;
-                *rm = old.wrapping_add(imm);
-                calc_add_flags(flag, old, imm, *rm);
-            }),
-            0x01 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
-                *rm |= imm;
-                flag.remove(CpuFlags::CARRY);
-                flag.set(CpuFlags::ZERO, *rm == 0);
-                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-            }),
-            0x02 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
-                let old = *rm;
-                let val = old.wrapping_add(imm);
-                let c = flag.contains(CpuFlags::CARRY) as u16;
-                *rm = val.wrapping_add(c);
-                calc_add_flags(flag, old, imm, *rm); // check?
-            }),
-            0x03 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
-                let old = *rm;
-                let c = flag.contains(CpuFlags::CARRY) as u16;
-                let val = imm.wrapping_add(c);
-                *rm = old.wrapping_sub(val);
-                calc_sub_flags(flag, old, val, *rm); // check?
-            }),
-            0x04 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
-                *rm &= imm;
-                flag.remove(CpuFlags::CARRY);
-                flag.set(CpuFlags::ZERO, *rm == 0);
-                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-            }),
-            0x05 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
-                let old = *rm;
-                *rm = old.wrapping_sub(imm);
-                calc_sub_flags(flag, old, imm, *rm);
-            }),
-            0x06 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
-                *rm ^= imm;
-                flag.remove(CpuFlags::CARRY);
-                flag.set(CpuFlags::ZERO, *rm == 0);
-                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-            }),
-            0x07 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
-                let val = (*rm).wrapping_sub(imm);
-                calc_sub_flags(flag, *rm, imm, val);
-            }),
-            reg => self.cpu_panic(&format!(
-                "Opext word instruction: failed to parse REG: {}",
-                reg
-            )),
-        };
 
         if is_addressing_mode(id_mod) {
             // R/M is memory.
             let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
             //println!("ip increment: {:X}", ip_increment);
             if word_inst && !imm_byte {
-                let imm = read_word(&self.mem, ip + 4);
+                let mut imm = read_word(&self.mem, ip + 4);
                 let mut rm = read_word(&self.mem, address as usize);
-                word_op(&mut rm, imm, &mut self.flag);
+                let word_op = self.get_opext_group1_inst(id_reg);
+                word_op(&mut rm, &mut imm, &mut self.flag);
                 write_word(&mut self.mem, address as usize, rm);
                 ip_increment + 2
             } else if word_inst && imm_byte {
                 let imm_byte = self.mem[ip + 4] as i8;
                 let imm = imm_byte as i16;
+                let mut imm = imm as u16;
                 let mut rm = read_word(&self.mem, address as usize);
-                word_op(&mut rm, imm as u16, &mut self.flag);
+                let word_op = self.get_opext_group1_inst(id_reg);
+                word_op(&mut rm, &mut imm, &mut self.flag);
                 write_word(&mut self.mem, address as usize, rm);
                 ip_increment + 1
                 // TODO check ip increment for this case..
             } else {
-                let imm = self.mem[ip + 4];
+                let mut imm = self.mem[ip + 4];
                 let mut rm = self.mem[address as usize];
-                byte_op(&mut rm, imm, &mut self.flag);
+                let byte_op = self.get_opext_group1_inst(id_reg);
+                byte_op(&mut rm, &mut imm, &mut self.flag);
                 self.mem[address as usize] = rm;
                 ip_increment + 1
             }
@@ -531,23 +435,27 @@ sf: {:?}",
             // R/M is a register
 
             if word_inst && !imm_byte {
-                let imm = read_word(&self.mem, ip + 2);
+                let mut imm = read_word(&self.mem, ip + 2);
                 let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
-                word_op(&mut rm, imm, &mut self.flag);
+                let word_op = self.get_opext_group1_inst(id_reg);
+                word_op(&mut rm, &mut imm, &mut self.flag);
                 self.set_register_value_by_modrm_reg_code(id_rm, rm);
                 4
             } else if word_inst && imm_byte {
                 // NOTE byte is sign extended!
                 let imm_byte = self.mem[ip + 2] as i8;
                 let imm = imm_byte as i16; // sign extend
+                let mut imm = imm as u16;
                 let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
-                word_op(&mut rm, imm as u16, &mut self.flag);
+                let word_op = self.get_opext_group1_inst(id_reg);
+                word_op(&mut rm, &mut imm, &mut self.flag);
                 self.set_register_value_by_modrm_reg_code(id_rm, rm);
                 3
             } else {
-                let imm = self.mem[ip + 2];
+                let mut imm = self.mem[ip + 2];
                 let mut rm = self.get_register_byte_value_by_modrm_reg_code(id_rm);
-                byte_op(&mut rm, imm, &mut self.flag);
+                let byte_op = self.get_opext_group1_inst(id_reg);
+                byte_op(&mut rm, &mut imm, &mut self.flag);
                 self.set_register_byte_value_by_modrm_reg_code(id_rm, rm);
                 3
             }

@@ -68,6 +68,13 @@ where
     flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
 }
 
+pub fn cmp<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
+where
+    T: NumericOps,
+{
+    only_flags(sub)(rm, reg, flags);
+}
+
 pub fn bitwise_or<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
 where
     T: NumericOps,
