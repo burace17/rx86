@@ -5,8 +5,8 @@ use crate::instructions::{
     swap_reg, ModRmByte, RegisterOrMemory,
 };
 use crate::memory::{read_word, write_word};
-use crate::operations;
 use crate::operations::swap_args;
+use crate::operations::{self, only_flags};
 use std::io;
 use std::mem;
 
@@ -655,12 +655,25 @@ sf: {}",
         self.do_modrm_word_inst(op, get_reg_func, |_s, _id_reg, _new_val| (), 2, 4)
     }
 
-    fn do_ax_inst<F>(&mut self, op: F) -> u16
+    fn do_ax_byte_inst<F>(&mut self, op: F) -> u16
     where
-        F: Fn(u16, &[u8], &mut u16, &mut u16),
+        F: Fn(&mut u8, &mut u8, &mut u16),
     {
-        op(self.ip, &mut self.mem, &mut self.ax, &mut self.flag);
+        let mut imm = self.mem[(self.ip + 1) as usize];
+        let mut al = self.ax.get_low();
+        op(&mut al, &mut imm, &mut self.flag);
+        self.ax.set_low(al);
         2
+    }
+
+    fn do_ax_word_inst<F>(&mut self, op: F) -> u16
+    where
+        F: Fn(&mut u16, &mut u16, &mut u16),
+    {
+        let mut imm = read_word(&self.mem, (self.ip + 1) as usize);
+        println!("ax: {:X}, imm: {:X}", self.ax, imm);
+        op(&mut self.ax, &mut imm, &mut self.flag);
+        3
     }
 
     // fn do_imm_inst<F>(&mut self, op: F) -> u16
@@ -698,44 +711,16 @@ sf: {}",
             0x01 => self.do_word_inst(operations::add),
             0x02 => self.do_byte_inst(swap_args(operations::add)),
             0x03 => self.do_word_inst(swap_args(operations::add)),
-            0x04 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = mem[(ip + 1) as usize];
-                let al = ax.get_low();
-                let val = al + imm; // TODO wrapping add
-                ax.set_low(val);
-                calc_add_flags(flag, al, imm, val);
-            }),
-            0x05 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = read_word(mem, (ip + 1) as usize);
-                let old_ax = *ax;
-                let val = old_ax + imm; // TODO wrapping add
-                *ax = val;
-                calc_add_flags(flag, old_ax, imm, val);
-            }),
+            0x04 => self.do_ax_byte_inst(operations::add),
+            0x05 => self.do_ax_word_inst(operations::add),
             0x06 => push_reg(&mut self.mem, &mut self.sp, self.es),
             0x07 => pop_reg(&self.mem, &mut self.sp, &mut self.es),
             0x08 => self.do_byte_inst(operations::bitwise_or),
             0x09 => self.do_word_inst(operations::bitwise_or),
             0x0A => self.do_byte_inst(swap_args(operations::bitwise_or)),
             0x0B => self.do_word_inst(swap_args(operations::bitwise_or)),
-            0x0C => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = mem[(ip + 1) as usize];
-                let val = ax.get_low() | imm;
-                ax.set_low(val);
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, val == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(val));
-                // todo clear overflow flag
-            }),
-            0x0D => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = read_word(mem, (ip + 1) as usize);
-                let val = *ax | imm;
-                *ax = val;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, val == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(val));
-                // todo clear overflow flag
-            }),
+            0x0C => self.do_ax_byte_inst(operations::bitwise_or),
+            0x0D => self.do_ax_word_inst(operations::bitwise_or),
             0x0E => push_reg(&mut self.mem, &mut self.sp, self.cs),
             // TODO: 0x0F is pop_reg for cs but only on 8086
             0x0F => pop_reg(&self.mem, &mut self.sp, &mut self.cs),
@@ -743,134 +728,42 @@ sf: {}",
             0x11 => self.do_word_inst(operations::add_with_carry),
             0x12 => self.do_byte_inst(swap_args(operations::add_with_carry)),
             0x13 => self.do_word_inst(swap_args(operations::add_with_carry)),
-            0x14 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = mem[(ip + 1) as usize];
-                let c = flag.get_bit(CARRY_FLAG) as u8;
-                let old = ax.get_low();
-                let val = old + imm + c; // TODO wrapping add
-                ax.set_low(val);
-                calc_add_flags(flag, old, imm + c, val); // check?
-            }),
-            0x15 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = read_word(mem, (ip + 1) as usize);
-                let c = flag.get_bit(CARRY_FLAG) as u16;
-                let old = *ax;
-                let val = old + imm + c; // TODO wrapping add
-                *ax = val;
-                calc_add_flags(flag, old, imm + c, val); // check?
-            }),
+            0x14 => self.do_ax_byte_inst(operations::add_with_carry),
+            0x15 => self.do_ax_word_inst(operations::add_with_carry),
             0x16 => push_reg(&mut self.mem, &mut self.sp, self.ss),
             0x17 => pop_reg(&self.mem, &mut self.sp, &mut self.ss),
             0x18 => self.do_byte_inst(operations::sub_with_borrow),
             0x19 => self.do_word_inst(operations::sub_with_borrow),
             0x1A => self.do_byte_inst(swap_args(operations::sub_with_borrow)),
             0x1B => self.do_word_inst(swap_args(operations::sub_with_borrow)),
-            0x1C => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = mem[(ip + 1) as usize];
-                let c = flag.get_bit(CARRY_FLAG) as u8;
-                let old = ax.get_low();
-                let val = old - (imm + c); // TODO wrapping add
-                ax.set_low(val);
-                calc_add_flags(flag, old, imm + c, val); // check?
-            }),
-            0x1D => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = read_word(mem, (ip + 1) as usize);
-                let c = flag.get_bit(CARRY_FLAG) as u16;
-                let old = *ax;
-                let val = old + (imm + c); // TODO wrapping add
-                *ax = val;
-                calc_add_flags(flag, old, imm + c, val); // check?
-            }),
+            0x1C => self.do_ax_byte_inst(operations::sub_with_borrow),
+            0x1D => self.do_ax_word_inst(operations::sub_with_borrow),
             0x1E => push_reg(&mut self.mem, &mut self.sp, self.ds),
             0x1F => pop_reg(&self.mem, &mut self.sp, &mut self.ds),
             0x20 => self.do_byte_inst(operations::bitwise_and),
             0x21 => self.do_word_inst(operations::bitwise_and),
             0x22 => self.do_byte_inst(swap_args(operations::bitwise_and)),
             0x23 => self.do_word_inst(swap_args(operations::bitwise_and)),
-            0x24 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = mem[(ip + 1) as usize];
-                let val = ax.get_low() & imm;
-                ax.set_low(val);
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, val == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(val));
-                // todo clear overflow flag
-            }),
-            0x25 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = read_word(mem, (ip + 1) as usize);
-                let val = *ax & imm;
-                *ax = val;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, val == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(val));
-                // todo clear overflow flag
-            }),
+            0x24 => self.do_ax_byte_inst(operations::bitwise_and),
+            0x25 => self.do_ax_word_inst(operations::bitwise_and),
             0x28 => self.do_byte_inst(operations::sub),
             0x29 => self.do_word_inst(operations::sub),
             0x2A => self.do_byte_inst(swap_args(operations::sub)),
             0x2B => self.do_word_inst(swap_args(operations::sub)),
-            0x2C => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = mem[(ip + 1) as usize];
-                let al = ax.get_low();
-                let val = al - imm; // TODO wrapping sub
-                ax.set_low(val);
-                calc_sub_flags(flag, al, imm, val);
-            }),
-            0x2D => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = read_word(mem, (ip + 1) as usize);
-                let old_ax = *ax;
-                let val = old_ax - imm; // TODO wrapping add
-                *ax = val;
-                calc_sub_flags(flag, old_ax, imm, val);
-            }),
+            0x2C => self.do_ax_byte_inst(operations::sub),
+            0x2D => self.do_ax_word_inst(operations::sub),
             0x30 => self.do_byte_inst(operations::bitwise_xor),
             0x31 => self.do_word_inst(operations::bitwise_xor),
             0x32 => self.do_byte_inst(swap_args(operations::bitwise_xor)),
             0x33 => self.do_word_inst(swap_args(operations::bitwise_xor)),
-            0x34 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = mem[(ip + 1) as usize];
-                let val = ax.get_low() ^ imm;
-                ax.set_low(val);
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, val == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(val));
-                // todo clear overflow flag
-            }),
-            0x35 => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = read_word(mem, (ip + 1) as usize);
-                let val = *ax ^ imm;
-                *ax = val;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, val == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(val));
-                // todo clear overflow flag
-            }),
-            0x38 => self.do_byte_inst(|rm, reg, flag| {
-                let val = (*rm).wrapping_sub(*reg);
-                calc_sub_flags(flag, *rm, *reg, val);
-            }),
-            0x39 => self.do_word_inst(|rm, reg, flag| {
-                let val = (*rm).wrapping_sub(*reg);
-                calc_sub_flags(flag, *rm, *reg, val);
-            }),
-            0x3A => self.do_byte_inst(|rm, reg, flag| {
-                let val = (*reg).wrapping_sub(*rm);
-                calc_sub_flags(flag, *rm, *reg, val);
-            }),
-            0x3B => self.do_word_inst(|rm, reg, flag| {
-                let val = (*reg).wrapping_sub(*rm);
-                calc_sub_flags(flag, *rm, *reg, val);
-            }),
-            0x3C => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = mem[(ip + 1) as usize];
-                let val = ax.get_low().wrapping_sub(imm);
-                calc_sub_flags(flag, ax.get_low(), imm, val);
-            }),
-            0x3D => self.do_ax_inst(|ip, mem: &[u8], ax: &mut u16, flag: &mut u16| {
-                let imm = read_word(mem, (ip + 1) as usize);
-                let val = (*ax).wrapping_sub(imm);
-                calc_sub_flags(flag, *ax, imm, val);
-            }),
+            0x34 => self.do_ax_byte_inst(operations::bitwise_xor),
+            0x35 => self.do_ax_word_inst(operations::bitwise_xor),
+            0x38 => self.do_byte_inst(only_flags(operations::sub)),
+            0x39 => self.do_word_inst(only_flags(operations::sub)),
+            0x3A => self.do_byte_inst(swap_args(only_flags(operations::sub))),
+            0x3B => self.do_word_inst(swap_args(only_flags(operations::sub))),
+            0x3C => self.do_ax_byte_inst(only_flags(operations::sub)),
+            0x3D => self.do_ax_word_inst(only_flags(operations::sub)),
             0x40 => inc_reg(&mut self.ax, &mut self.flag),
             0x41 => inc_reg(&mut self.cx, &mut self.flag),
             0x42 => inc_reg(&mut self.dx, &mut self.flag),
@@ -2014,85 +1907,436 @@ mod tests {
         assert!(!cpu.flag.get_bit(ZERO_FLAG));
         assert!(!cpu.flag.get_bit(SIGN_FLAG));
     }
-    
+    // ----------------------------
+    // 0x1C: SBB AL, imm8 (Subtract with Borrow)
+    // ----------------------------
     #[test]
-fn test_sbb_0x1c_subtract_with_borrow() {
-    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
-    // Instruction: SBB AL, 0xFF (no borrow)
-    cpu.mem[0..2].copy_from_slice(&[0x1C, 0xFF]);
-    cpu.ax.set_low(0x01);
-    cpu.flag.set_bit(CARRY_FLAG, false); // No borrow
-    cpu.do_cycle();
+    fn test_1c_sbb_al_underflow() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SBB AL, 0x01 (Subtract with borrow: AL = AL - 0x01 - CF)
+        cpu.mem[0..2].copy_from_slice(&[0x1C, 0x01]);
+        cpu.ax = 0x0000; // AL = 0x00
+        cpu.flag.set_bit(CARRY_FLAG, true); // Previous borrow exists
+        cpu.do_cycle();
 
-    assert_eq!(cpu.ax.get_low(), 0x00);
-    assert_eq!(cpu.ip, 3);
-    assert!(!cpu.flag.get_bit(CARRY_FLAG));
-    assert!(cpu.flag.get_bit(ZERO_FLAG));
-    assert!(!cpu.flag.get_bit(SIGN_FLAG));
-}
+        assert_eq!(cpu.ax, 0x00FE); // 0x00 - 0x01 - 1 = 0xFE (CF=1)
+        assert_eq!(cpu.ip, 2);
+        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(cpu.flag.get_bit(SIGN_FLAG));
+    }
 
-#[test]
-fn test_sbb_0x1c_subtract_with_borrow_carry() {
-    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
-    // Instruction: SBB AL, 0xFF (with borrow)
-    cpu.mem[0..2].copy_from_slice(&[0x1C, 0xFF]);
-    cpu.flag.set_bit(CARRY_FLAG, true); // Borrow set
-    cpu.do_cycle();
+    #[test]
+    fn test_1c_sbb_al_zero() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SBB AL, 0x01
+        cpu.mem[0..2].copy_from_slice(&[0x1C, 0x01]);
+        cpu.ax = 0x0001; // AL = 0x01
+        cpu.flag.set_bit(CARRY_FLAG, false); // No previous borrow
+        cpu.do_cycle();
 
-    assert_eq!(cpu.ax.get_low(), 0xFF);
-    assert_eq!(cpu.ip, 3);
-    assert!(cpu.flag.get_bit(CARRY_FLAG));
-    assert!(!cpu.flag.get_bit(ZERO_FLAG));
-    assert!(cpu.flag.get_bit(SIGN_FLAG));
-}
+        assert_eq!(cpu.ax, 0x0000); // 0x01 - 0x01 - 0 = 0x00
+        assert_eq!(cpu.ip, 2);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
 
-#[test]
-fn test_sbb_0x1d_subtract_word_with_borrow() {
-    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
-    // Instruction: SBB AX, 0xFFFF (no borrow)
-    cpu.mem[0..3].copy_from_slice(&[0x1D, 0xFF, 0xFF]);
-    cpu.ax = 0x0001;
-    cpu.flag.set_bit(CARRY_FLAG, false); // No borrow
-    cpu.do_cycle();
+    // ----------------------------
+    // 0x1D: SBB AX, imm16 (Subtract with Borrow)
+    // ----------------------------
+    #[test]
+    fn test_1d_sbb_ax_underflow() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SBB AX, 0x0001
+        cpu.mem[0..3].copy_from_slice(&[0x1D, 0x01, 0x00]);
+        cpu.ax = 0x0000;
+        cpu.flag.set_bit(CARRY_FLAG, true); // Previous borrow
+        cpu.do_cycle();
 
-    assert_eq!(cpu.ax, 0x0000);
-    assert_eq!(cpu.ip, 4);
-    assert!(!cpu.flag.get_bit(CARRY_FLAG));
-    assert!(cpu.flag.get_bit(ZERO_FLAG));
-    assert!(!cpu.flag.get_bit(SIGN_FLAG));
-}
+        assert_eq!(cpu.ax, 0xFFFE); // 0x0000 - 0x0001 - 1 = 0xFFFE
+        assert_eq!(cpu.ip, 3);
+        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(cpu.flag.get_bit(SIGN_FLAG));
+    }
 
-#[test]
-fn test_sbb_0x1d_subtract_word_with_borrow_carry() {
-    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
-    // Instruction: SBB AX, 0xFFFF (with borrow)
-    cpu.mem[0..3].copy_from_slice(&[0x1D, 0xFF, 0xFF]);
-    cpu.ax = 0x0000;
-    cpu.flag.set_bit(CARRY_FLAG, true); // Borrow set
-    cpu.do_cycle();
+    #[test]
+    fn test_1d_sbb_ax_signed_negative() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SBB AX, 0x0001
+        cpu.mem[0..3].copy_from_slice(&[0x1D, 0x01, 0x00]);
+        cpu.ax = 0x8000; // -32768 (signed)
+        cpu.flag.set_bit(CARRY_FLAG, false); // No borrow
+        cpu.do_cycle();
 
-    assert_eq!(cpu.ax, 0x00FF);
-    assert_eq!(cpu.ip, 4);
-    assert!(cpu.flag.get_bit(CARRY_FLAG));
-    assert!(!cpu.flag.get_bit(ZERO_FLAG));
-    assert!(cpu.flag.get_bit(SIGN_FLAG));
-}
+        assert_eq!(cpu.ax, 0x7FFF); // -32768 - 1 = -32769
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
 
-#[test]
-fn test_sbb_0x1c_subtract_with_borrow_zero_result() {
-    let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
-    // Instruction: SBB AL, 0x01 (no borrow)
-    cpu.mem[0..2].copy_from_slice(&[0x1C, 0x01]);
-    cpu.ax.set_low(0x01);
-    cpu.flag.set_bit(CARRY_FLAG, false); // No borrow
-    cpu.do_cycle();
+    #[test]
+    fn test_1d_sbb_ax_edge_case() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SBB AX, 0x7FFF (Subtract 32767)
+        cpu.mem[0..3].copy_from_slice(&[0x1D, 0xFF, 0x7F]);
+        cpu.ax = 0x8000; // -32768 (signed)
+        cpu.flag.set_bit(CARRY_FLAG, true); // Previous borrow
+        cpu.do_cycle();
 
-    assert_eq!(cpu.ax.get_low(), 0x00);
-    assert_eq!(cpu.ip, 3);
-    assert!(!cpu.flag.get_bit(CARRY_FLAG));
-    assert!(cpu.flag.get_bit(ZERO_FLAG));
-    assert!(!cpu.flag.get_bit(SIGN_FLAG));
-}
+        assert_eq!(cpu.ax, 0x0000); // -32768 - 32767 - 1 = -65536 → wraps to 0x0000
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    // ----------------------------
+    // 0x24: AND AL, imm8
+    // ----------------------------
+    #[test]
+    fn test_24_and_al_zero() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // AND AL, 0x00
+        cpu.mem[0..2].copy_from_slice(&[0x24, 0x00]);
+        cpu.ax = 0x00FF; // AL = 0xFF
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0000);
+        assert_eq!(cpu.ip, 2);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    #[test]
+    fn test_24_and_al_negative() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // AND AL, 0x80
+        cpu.mem[0..2].copy_from_slice(&[0x24, 0x80]);
+        cpu.ax = 0x00FF; // AL = 0xFF
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0080);
+        assert_eq!(cpu.ip, 2);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    // ----------------------------
+    // 0x25: AND AX, imm16
+    // ----------------------------
+    #[test]
+    fn test_25_and_ax_negative() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // AND AX, 0x8000
+        cpu.mem[0..3].copy_from_slice(&[0x25, 0x00, 0x80]);
+        cpu.ax = 0xFFFF;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x8000);
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    #[test]
+    fn test_25_and_ax_partial_mask() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // AND AX, 0x00FF
+        cpu.mem[0..3].copy_from_slice(&[0x25, 0xFF, 0x00]);
+        cpu.ax = 0x1234;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0034);
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    #[test]
+    fn test_25_and_ax_edge_case() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // AND AX, 0x0000
+        cpu.mem[0..3].copy_from_slice(&[0x25, 0x00, 0x00]);
+        cpu.ax = 0xFFFF;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0000);
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+    }
+
+    // ----------------------------
+    // 0x2C: SUB AL, imm8
+    // ----------------------------
+    #[test]
+    fn test_2c_sub_al_underflow() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SUB AL, 0x01
+        cpu.mem[0..2].copy_from_slice(&[0x2C, 0x01]);
+        cpu.ax = 0x0000; // AL = 0x00
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x00FF);
+        assert_eq!(cpu.ip, 2);
+        assert!(cpu.flag.get_bit(CARRY_FLAG), "CF should be set");
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF should be set");
+    }
+
+    #[test]
+    fn test_2c_sub_al_zero() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SUB AL, 0x05
+        cpu.mem[0..2].copy_from_slice(&[0x2C, 0x05]);
+        cpu.ax = 0x0005; // AL = 0x05
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0000);
+        assert_eq!(cpu.ip, 2);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
+        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
+        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+    }
+
+    // ----------------------------
+    // 0x2D: SUB AX, imm16
+    // ----------------------------
+    #[test]
+    fn test_2d_sub_ax_signed_boundary() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SUB AX, 0x0001
+        cpu.mem[0..3].copy_from_slice(&[0x2D, 0x01, 0x00]);
+        cpu.ax = 0x8000; // -32768 signed
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x7FFF);
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+    }
+
+    #[test]
+    fn test_2d_sub_ax_edge_case() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SUB AX, 0xFFFF
+        cpu.mem[0..3].copy_from_slice(&[0x2D, 0xFF, 0xFF]);
+        cpu.ax = 0x0001;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0002);
+        assert_eq!(cpu.ip, 3);
+        assert!(cpu.flag.get_bit(CARRY_FLAG), "CF should be set");
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+    }
+
+    #[test]
+    fn test_2d_sub_ax_underflow() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // SUB AX, 0x0001
+        cpu.mem[0..3].copy_from_slice(&[0x2D, 0x01, 0x00]);
+        cpu.ax = 0x0000;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0xFFFF);
+        assert_eq!(cpu.ip, 3);
+        assert!(cpu.flag.get_bit(CARRY_FLAG), "CF should be set");
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF should be set");
+    }
+
+    // ----------------------------
+    // 0x34: XOR AL, imm8
+    // ----------------------------
+    #[test]
+    fn test_34_xor_al_zero() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // XOR AL, 0xFF
+        cpu.mem[0..2].copy_from_slice(&[0x34, 0xFF]);
+        cpu.ax = 0x00FF; // AL = 0xFF (AX = 0x00FF)
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0000); // 0xFF ^ 0xFF = 0x00
+        assert_eq!(cpu.ip, 2);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
+        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
+        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+    }
+
+    #[test]
+    fn test_34_xor_al_negative() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // XOR AL, 0x80
+        cpu.mem[0..2].copy_from_slice(&[0x34, 0x80]);
+        cpu.ax = 0x0000; // AL = 0x00
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0080); // 0x00 ^ 0x80 = 0x80
+        assert_eq!(cpu.ip, 2);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF should be set");
+    }
+
+    // ----------------------------
+    // 0x35: XOR AX, imm16
+    // ----------------------------
+    #[test]
+    fn test_35_xor_ax_zero() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // XOR AX, 0xFFFF
+        cpu.mem[0..3].copy_from_slice(&[0x35, 0xFF, 0xFF]);
+        cpu.ax = 0xFFFF;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0000); // 0xFFFF ^ 0xFFFF = 0x0000
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
+        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
+        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+    }
+
+    #[test]
+    fn test_35_xor_ax_negative() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // XOR AX, 0x8000
+        cpu.mem[0..3].copy_from_slice(&[0x35, 0x00, 0x80]);
+        cpu.ax = 0x0000;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x8000); // 0x0000 ^ 0x8000 = 0x8000
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF should be set");
+    }
+
+    #[test]
+    fn test_35_xor_ax_edge_case() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // XOR AX, 0x1234
+        cpu.mem[0..3].copy_from_slice(&[0x35, 0x34, 0x12]);
+        cpu.ax = 0x1234;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0000); // 0x1234 ^ 0x1234 = 0x0000
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
+        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
+        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+    }
+
+    // ----------------------------
+    // 0x3C: CMP AL, imm8
+    // ----------------------------
+    #[test]
+    fn test_3c_cmp_al_zero() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // CMP AL, 0x05
+        cpu.mem[0..2].copy_from_slice(&[0x3C, 0x05]);
+        cpu.ax = 0x0005; // AL = 0x05
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0005); // Register unchanged
+        assert_eq!(cpu.ip, 2);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
+        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
+        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+    }
+
+    #[test]
+    fn test_3c_cmp_al_unsigned_underflow() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // CMP AL, 0x02
+        cpu.mem[0..2].copy_from_slice(&[0x3C, 0x02]);
+        cpu.ax = 0x0001; // AL = 0x01
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0001); // Register unchanged
+        assert_eq!(cpu.ip, 2);
+        assert!(cpu.flag.get_bit(CARRY_FLAG), "CF=1 (0x01 < 0x02 unsigned)");
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF=1 (0xFF is negative)");
+    }
+
+    #[test]
+    fn test_3c_cmp_al_signed_positive() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // CMP AL, 0x01
+        cpu.mem[0..2].copy_from_slice(&[0x3C, 0x01]);
+        cpu.ax = 0x0080; // AL = 0x80 (signed -128)
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0080); // Register unchanged
+        assert_eq!(cpu.ip, 2);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF=0 (0x80 > 0x01 unsigned)");
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF=0 (0x7F is positive)");
+    }
+
+    // ----------------------------
+    // 0x3D: CMP AX, imm16
+    // ----------------------------
+    #[test]
+    fn test_3d_cmp_ax_zero() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // CMP AX, 0x1234
+        cpu.mem[0..3].copy_from_slice(&[0x3D, 0x34, 0x12]);
+        cpu.ax = 0x1234;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x1234); // Register unchanged
+        assert_eq!(cpu.ip, 3);
+        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
+        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
+        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+    }
+
+    #[test]
+    fn test_3d_cmp_ax_unsigned_underflow() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // CMP AX, 0x0002
+        cpu.mem[0..3].copy_from_slice(&[0x3D, 0x02, 0x00]);
+        cpu.ax = 0x0001;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0001); // Register unchanged
+        assert_eq!(cpu.ip, 3);
+        assert!(
+            cpu.flag.get_bit(CARRY_FLAG),
+            "CF=1 (0x0001 < 0x0002 unsigned)"
+        );
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF=1 (0xFFFF is negative)");
+    }
+
+    #[test]
+    fn test_3d_cmp_ax_signed_negative() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // CMP AX, 0x8000
+        cpu.mem[0..3].copy_from_slice(&[0x3D, 0x00, 0x80]);
+        cpu.ax = 0x0001; // Compare 1 vs -32768 (signed)
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x0001); // Register unchanged
+        assert_eq!(cpu.ip, 3);
+        assert!(
+            cpu.flag.get_bit(CARRY_FLAG),
+            "CF=1 (0x0001 < 0x8000 unsigned)"
+        );
+        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
+        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF=1 (0x8001 is negative)");
+    }
 
     // This is one big test that runs the program from: https://codegolf.stackexchange.com/questions/11880/emulate-an-intel-8086-cpu
     // and verifies it matches the reference output

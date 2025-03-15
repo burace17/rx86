@@ -1,3 +1,5 @@
+use num_traits::WrappingAdd;
+
 use crate::{
     bits::Bits,
     cpu::{CARRY_FLAG, SIGN_FLAG, ZERO_FLAG},
@@ -10,6 +12,18 @@ where
     F: Fn(&mut T, &mut T, &mut T2),
 {
     move |a, b, c| op(b, a, c)
+}
+
+pub fn only_flags<F, T, T2>(op: F) -> impl Fn(&mut T, &mut T, &mut T2)
+where
+    F: Fn(&mut T, &mut T, &mut T2),
+    T: NumericOps,
+{
+    move |a, b, c| {
+        let mut ax = *a;
+        let mut bx = *b;
+        op(&mut ax, &mut bx, c)
+    }
 }
 
 pub fn add<T>(rm: &mut T, reg: &mut T, flags: &mut u16)
@@ -49,7 +63,10 @@ where
     let c: T = flags.get_bit(CARRY_FLAG).into();
     let val = (*reg).wrapping_add(&c);
     *rm = old.wrapping_sub(&val);
-    calc_sub_flags(flags, old, val, *rm); // check?
+    let carry = old.upcast() < ((*reg).upcast().wrapping_add(&c.upcast()));
+    flags.set_bit(CARRY_FLAG, carry);
+    flags.set_bit(ZERO_FLAG, *rm == T::zero());
+    flags.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
 }
 
 pub fn bitwise_or<T>(rm: &mut T, reg: &mut T, flags: &mut u16)

@@ -1,10 +1,13 @@
-use std::ops::{Add, BitAndAssign, BitOrAssign, BitXorAssign};
+use std::{
+    fmt::UpperHex,
+    ops::{Add, BitAndAssign, BitOrAssign, BitXorAssign},
+};
 
 use num_conv::CastSigned;
 use num_traits::{Bounded, WrappingAdd, WrappingSub, Zero};
 
 pub trait Upcast {
-    type UpcastedType: Add<Output: PartialOrd<Self::UpcastedType>> + PartialOrd;
+    type UpcastedType: Add<Output: PartialOrd<Self::UpcastedType>> + PartialOrd + WrappingAdd;
 
     fn upcast(&self) -> Self::UpcastedType;
 }
@@ -39,6 +42,7 @@ pub trait NumericOps:
     + BitOrAssign
     + BitAndAssign
     + BitXorAssign
+    + UpperHex
     + From<bool>
 {
 }
