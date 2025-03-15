@@ -1,8 +1,7 @@
 use num_traits::WrappingAdd;
 
 use crate::{
-    bits::Bits,
-    cpu::{CARRY_FLAG, SIGN_FLAG, ZERO_FLAG},
+    cpu::CpuFlags,
     instructions::{calc_add_flags, calc_sign_bit, calc_sub_flags},
     traits::NumericOps,
 };
@@ -26,7 +25,7 @@ where
     }
 }
 
-pub fn add<T>(rm: &mut T, reg: &mut T, flags: &mut u16)
+pub fn add<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
 where
     T: NumericOps,
 {
@@ -35,18 +34,18 @@ where
     calc_add_flags(flags, old, *reg, *rm);
 }
 
-pub fn add_with_carry<T>(rm: &mut T, reg: &mut T, flags: &mut u16)
+pub fn add_with_carry<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
 where
     T: NumericOps,
 {
     let old = *rm;
     let val = old.wrapping_add(reg);
-    let c: T = flags.get_bit(CARRY_FLAG).into();
+    let c: T = flags.contains(CpuFlags::CARRY).into();
     *rm = val.wrapping_add(&c);
     calc_add_flags(flags, old, *reg, *rm); // check?
 }
 
-pub fn sub<T>(rm: &mut T, reg: &mut T, flags: &mut u16)
+pub fn sub<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
 where
     T: NumericOps,
 {
@@ -55,49 +54,49 @@ where
     calc_sub_flags(flags, old, *reg, *rm);
 }
 
-pub fn sub_with_borrow<T>(rm: &mut T, reg: &mut T, flags: &mut u16)
+pub fn sub_with_borrow<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
 where
     T: NumericOps,
 {
     let old = *rm;
-    let c: T = flags.get_bit(CARRY_FLAG).into();
+    let c: T = flags.contains(CpuFlags::CARRY).into();
     let val = (*reg).wrapping_add(&c);
     *rm = old.wrapping_sub(&val);
     let carry = old.upcast() < ((*reg).upcast().wrapping_add(&c.upcast()));
-    flags.set_bit(CARRY_FLAG, carry);
-    flags.set_bit(ZERO_FLAG, *rm == T::zero());
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+    flags.set(CpuFlags::CARRY, carry);
+    flags.set(CpuFlags::ZERO, *rm == T::zero());
+    flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
 }
 
-pub fn bitwise_or<T>(rm: &mut T, reg: &mut T, flags: &mut u16)
+pub fn bitwise_or<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
 where
     T: NumericOps,
 {
     *rm |= *reg;
-    flags.set_bit(CARRY_FLAG, false);
-    flags.set_bit(ZERO_FLAG, *rm == T::zero());
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+    flags.remove(CpuFlags::CARRY);
+    flags.set(CpuFlags::ZERO, *rm == T::zero());
+    flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
     // todo clear overflow flag
 }
 
-pub fn bitwise_and<T>(rm: &mut T, reg: &mut T, flags: &mut u16)
+pub fn bitwise_and<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
 where
     T: NumericOps,
 {
     *rm &= *reg;
-    flags.set_bit(CARRY_FLAG, false);
-    flags.set_bit(ZERO_FLAG, *rm == T::zero());
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+    flags.remove(CpuFlags::CARRY);
+    flags.set(CpuFlags::ZERO, *rm == T::zero());
+    flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
     // todo clear overflow flag
 }
 
-pub fn bitwise_xor<T>(rm: &mut T, reg: &mut T, flags: &mut u16)
+pub fn bitwise_xor<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
 where
     T: NumericOps,
 {
     *rm ^= *reg;
-    flags.set_bit(CARRY_FLAG, false);
-    flags.set_bit(ZERO_FLAG, *rm == T::zero());
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+    flags.remove(CpuFlags::CARRY);
+    flags.set(CpuFlags::ZERO, *rm == T::zero());
+    flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
     // todo clear overflow flag
 }

@@ -7,6 +7,7 @@ use crate::instructions::{
 use crate::memory::{read_word, write_word};
 use crate::operations::swap_args;
 use crate::operations::{self, only_flags};
+use bitflags::bitflags;
 use std::io;
 use std::mem;
 
@@ -19,6 +20,15 @@ pub const SIGN_FLAG: u16 = 7;
 // static INTERRUPT_FLAG: u16 = 9;
 // static DIRECTION_FLAG: u16 = 10;
 // static OVERFLOW_FLAG: u16 = 11;
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct CpuFlags: u16 {
+        const CARRY = 1 << CARRY_FLAG;
+        const ZERO = 1 << ZERO_FLAG;
+        const SIGN = 1 << SIGN_FLAG;
+    }
+}
 
 pub struct Cpu {
     // Registers
@@ -37,7 +47,7 @@ pub struct Cpu {
     ss: u16,
     es: u16,
 
-    flag: u16,
+    flag: CpuFlags,
     mem: Box<[u8]>,
 
     pub breakpoints: Vec<u16>,
@@ -71,7 +81,7 @@ impl Cpu {
             ds: 0,
             ss: 0,
             es: 0,
-            flag: 0,
+            flag: CpuFlags::empty(),
             mem,
             breakpoints: Vec::new(),
         }
@@ -107,8 +117,8 @@ ip: 0x{:X}
 
 cs: 0x{:X}    ds: 0x{:X}    ss: 0x{:X}    es: 0x{:X}
 
-cf: {}     zf: {}
-sf: {}",
+cf: {:?}     zf: {:?}
+sf: {:?}",
             self.ax,
             self.bx,
             self.cx,
@@ -122,9 +132,9 @@ sf: {}",
             self.ds,
             self.ss,
             self.es,
-            self.flag.get_bit(CARRY_FLAG),
-            self.flag.get_bit(ZERO_FLAG),
-            self.flag.get_bit(SIGN_FLAG)
+            self.flag.contains(CpuFlags::CARRY),
+            self.flag.contains(CpuFlags::ZERO),
+            self.flag.contains(CpuFlags::SIGN),
         );
     }
 
@@ -317,14 +327,14 @@ sf: {}",
 
     fn do_grp2_inst<F>(&mut self, op: F) -> u16
     where
-        F: Fn(&mut u8, &mut u8, &mut u16),
+        F: Fn(&mut u8, &mut u8, &mut CpuFlags),
     {
         self.do_modrm_byte_inst(op, |_, modrm_byte, _| modrm_byte.id_reg, |_, _, _| {}, 0, 2)
     }
 
     fn do_byte_inst<F>(&mut self, op: F) -> u16
     where
-        F: Fn(&mut u8, &mut u8, &mut u16),
+        F: Fn(&mut u8, &mut u8, &mut CpuFlags),
     {
         self.do_modrm_byte_inst(
             op,
@@ -344,7 +354,7 @@ sf: {}",
         ip_increment_if_register: u16,
     ) -> u16
     where
-        F: Fn(&mut u8, &mut u8, &mut u16),
+        F: Fn(&mut u8, &mut u8, &mut CpuFlags),
         RegGetter: Fn(&Self, ModRmByte, u16) -> u8,
         RegSetter: Fn(&mut Self, u8, u8),
     {
@@ -374,60 +384,61 @@ sf: {}",
         let modrm_byte = self.mem[ip + 1];
         let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte).unpack();
 
-        type ByteOpFunc = dyn Fn(&mut u8, u8, &mut u16);
-        type WordOpFunc = dyn Fn(&mut u16, u16, &mut u16);
+        type ByteOpFunc = dyn Fn(&mut u8, u8, &mut CpuFlags);
+        type WordOpFunc = dyn Fn(&mut u16, u16, &mut CpuFlags);
 
         let byte_op: Box<ByteOpFunc> = match id_reg {
-            0x00 => Box::new(|rm: &mut u8, imm: u8, flag: &mut u16| {
+            0x00 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
                 // self.cpu_debug_msg("ADD Eb, Ib");
                 let old = *rm;
                 *rm = old.wrapping_add(imm);
                 calc_add_flags(flag, old, imm, *rm);
             }),
-            0x01 => Box::new(|rm: &mut u8, imm: u8, flag: &mut u16| {
+            0x01 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
                 // self.cpu_debug_msg("OR Eb, Ib");
                 *rm |= imm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+                flag.remove(CpuFlags::CARRY);
+                flag.set(CpuFlags::ZERO, *rm == 0);
+                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
+                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
             }),
-            0x02 => Box::new(|rm: &mut u8, imm: u8, flag: &mut u16| {
+            0x02 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
                 // self.cpu_debug_msg("ADC Eb, Ib");
                 let old = *rm;
                 let val = old.wrapping_add(imm);
-                let c = flag.get_bit(CARRY_FLAG) as u8;
+                let c = flag.contains(CpuFlags::CARRY) as u8;
                 *rm = val.wrapping_add(c);
                 calc_add_flags(flag, old, imm, *rm); // check?
             }),
-            0x03 => Box::new(|rm: &mut u8, imm: u8, flag: &mut u16| {
+            0x03 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
                 //self.cpu_debug_msg("SBB Eb, Ib");
                 let old = *rm;
-                let c = flag.get_bit(CARRY_FLAG) as u8;
+                let c = flag.contains(CpuFlags::CARRY) as u8;
                 let val = imm.wrapping_add(c);
                 *rm = val.wrapping_sub(c);
                 calc_sub_flags(flag, old, val, *rm); // check?
             }),
-            0x04 => Box::new(|rm: &mut u8, imm: u8, flag: &mut u16| {
+            0x04 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
                 //self.cpu_debug_msg("AND Eb, Ib");
                 *rm &= imm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+                flag.remove(CpuFlags::CARRY);
+                flag.set(CpuFlags::ZERO, *rm == 0);
+                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
             }),
-            0x05 => Box::new(|rm: &mut u8, imm: u8, flag: &mut u16| {
+            0x05 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
                 //self.cpu_debug_msg("SUB Eb, Ib");
                 let old = *rm;
                 *rm = old.wrapping_sub(imm);
                 calc_sub_flags(flag, old, imm, *rm);
             }),
-            0x06 => Box::new(|rm: &mut u8, imm: u8, flag: &mut u16| {
+            0x06 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
                 //self.cpu_debug_msg("XOR Eb, Ib");
                 *rm ^= imm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+                flag.remove(CpuFlags::CARRY);
+                flag.set(CpuFlags::ZERO, *rm == 0);
+                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
             }),
-            0x07 => Box::new(|rm: &mut u8, imm: u8, flag: &mut u16| {
+            0x07 => Box::new(|rm: &mut u8, imm: u8, flag: &mut CpuFlags| {
                 //self.cpu_debug_msg("CMP Eb, Ib");
                 let val = (*rm).wrapping_sub(imm);
                 calc_sub_flags(flag, *rm, imm, val);
@@ -439,49 +450,49 @@ sf: {}",
         };
 
         let word_op: Box<WordOpFunc> = match id_reg {
-            0x00 => Box::new(|rm: &mut u16, imm: u16, flag: &mut u16| {
+            0x00 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
                 let old = *rm;
                 *rm = old.wrapping_add(imm);
                 calc_add_flags(flag, old, imm, *rm);
             }),
-            0x01 => Box::new(|rm: &mut u16, imm: u16, flag: &mut u16| {
+            0x01 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
                 *rm |= imm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+                flag.remove(CpuFlags::CARRY);
+                flag.set(CpuFlags::ZERO, *rm == 0);
+                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
             }),
-            0x02 => Box::new(|rm: &mut u16, imm: u16, flag: &mut u16| {
+            0x02 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
                 let old = *rm;
                 let val = old.wrapping_add(imm);
-                let c = flag.get_bit(CARRY_FLAG) as u16;
+                let c = flag.contains(CpuFlags::CARRY) as u16;
                 *rm = val.wrapping_add(c);
                 calc_add_flags(flag, old, imm, *rm); // check?
             }),
-            0x03 => Box::new(|rm: &mut u16, imm: u16, flag: &mut u16| {
+            0x03 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
                 let old = *rm;
-                let c = flag.get_bit(CARRY_FLAG) as u16;
+                let c = flag.contains(CpuFlags::CARRY) as u16;
                 let val = imm.wrapping_add(c);
                 *rm = old.wrapping_sub(val);
                 calc_sub_flags(flag, old, val, *rm); // check?
             }),
-            0x04 => Box::new(|rm: &mut u16, imm: u16, flag: &mut u16| {
+            0x04 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
                 *rm &= imm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+                flag.remove(CpuFlags::CARRY);
+                flag.set(CpuFlags::ZERO, *rm == 0);
+                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
             }),
-            0x05 => Box::new(|rm: &mut u16, imm: u16, flag: &mut u16| {
+            0x05 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
                 let old = *rm;
                 *rm = old.wrapping_sub(imm);
                 calc_sub_flags(flag, old, imm, *rm);
             }),
-            0x06 => Box::new(|rm: &mut u16, imm: u16, flag: &mut u16| {
+            0x06 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
                 *rm ^= imm;
-                flag.set_bit(CARRY_FLAG, false);
-                flag.set_bit(ZERO_FLAG, *rm == 0);
-                flag.set_bit(SIGN_FLAG, calc_sign_bit(*rm));
+                flag.remove(CpuFlags::CARRY);
+                flag.set(CpuFlags::ZERO, *rm == 0);
+                flag.set(CpuFlags::SIGN, calc_sign_bit(*rm));
             }),
-            0x07 => Box::new(|rm: &mut u16, imm: u16, flag: &mut u16| {
+            0x07 => Box::new(|rm: &mut u16, imm: u16, flag: &mut CpuFlags| {
                 let val = (*rm).wrapping_sub(imm);
                 calc_sub_flags(flag, *rm, imm, val);
             }),
@@ -545,7 +556,7 @@ sf: {}",
 
     fn do_word_inst<F>(&mut self, op: F) -> u16
     where
-        F: Fn(&mut u16, &mut u16, &mut u16),
+        F: Fn(&mut u16, &mut u16, &mut CpuFlags),
     {
         self.do_modrm_word_inst(
             op,
@@ -565,7 +576,7 @@ sf: {}",
         ip_increment_if_register: u16,
     ) -> u16
     where
-        F: Fn(&mut u16, &mut u16, &mut u16),
+        F: Fn(&mut u16, &mut u16, &mut CpuFlags),
         RegGetter: Fn(&Self, ModRmByte, u16) -> u16,
         RegSetter: Fn(&mut Self, u8, u16),
     {
@@ -603,7 +614,7 @@ sf: {}",
         ip_increment_if_register: u16,
     ) -> u16
     where
-        F: Fn(&mut InstructionDataType, &mut InstructionDataType, &mut u16),
+        F: Fn(&mut InstructionDataType, &mut InstructionDataType, &mut CpuFlags),
         RmGetter: Fn(&Self, RegisterOrMemory) -> InstructionDataType,
         RmSetter: Fn(&mut Self, RegisterOrMemory, InstructionDataType),
         RegGetter: Fn(&Self, ModRmByte, u16) -> InstructionDataType,
@@ -642,7 +653,7 @@ sf: {}",
 
     fn do_rm_imm_word_inst<F>(&mut self, op: F) -> u16
     where
-        F: Fn(&mut u16, &mut u16, &mut u16),
+        F: Fn(&mut u16, &mut u16, &mut CpuFlags),
     {
         let get_reg_func = |s: &Cpu, modrm_byte: ModRmByte, ip_increment| {
             if is_addressing_mode(modrm_byte.id_mod) {
@@ -657,7 +668,7 @@ sf: {}",
 
     fn do_ax_byte_inst<F>(&mut self, op: F) -> u16
     where
-        F: Fn(&mut u8, &mut u8, &mut u16),
+        F: Fn(&mut u8, &mut u8, &mut CpuFlags),
     {
         let mut imm = self.mem[(self.ip + 1) as usize];
         let mut al = self.ax.get_low();
@@ -668,10 +679,9 @@ sf: {}",
 
     fn do_ax_word_inst<F>(&mut self, op: F) -> u16
     where
-        F: Fn(&mut u16, &mut u16, &mut u16),
+        F: Fn(&mut u16, &mut u16, &mut CpuFlags),
     {
         let mut imm = read_word(&self.mem, (self.ip + 1) as usize);
-        println!("ax: {:X}, imm: {:X}", self.ax, imm);
         op(&mut self.ax, &mut imm, &mut self.flag);
         3
     }
@@ -696,7 +706,7 @@ sf: {}",
     // I don't know what to call this
     fn do_ip_inst<F>(&mut self, op: F) -> u16
     where
-        F: Fn(&[u8], &mut u16, u16),
+        F: Fn(&[u8], &mut u16, CpuFlags),
     {
         op(&self.mem, &mut self.ip, self.flag);
         2
@@ -807,50 +817,50 @@ sf: {}",
             0x5E => pop_reg(&self.mem, &mut self.sp, &mut self.si),
             0x5F => pop_reg(&self.mem, &mut self.sp, &mut self.di),
             // TODO this can be generalized a bit...
-            0x72 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
-                if flag.get_bit(CARRY_FLAG) {
+            0x72 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
+                if flag.contains(CpuFlags::CARRY) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
             }),
-            0x74 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
-                if flag.get_bit(ZERO_FLAG) {
+            0x74 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
+                if flag.contains(CpuFlags::ZERO) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
             }),
-            0x75 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
-                if !flag.get_bit(ZERO_FLAG) {
+            0x75 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
+                if !flag.contains(CpuFlags::ZERO) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
             }),
-            0x76 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
-                if flag.get_bit(CARRY_FLAG) || flag.get_bit(ZERO_FLAG) {
+            0x76 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
+                if flag.contains(CpuFlags::CARRY) || flag.contains(CpuFlags::ZERO) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
             }),
-            0x77 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
-                if !flag.get_bit(CARRY_FLAG) && !flag.get_bit(ZERO_FLAG) {
+            0x77 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
+                if !flag.contains(CpuFlags::CARRY) && !flag.contains(CpuFlags::ZERO) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
             }),
-            0x78 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
-                if flag.get_bit(SIGN_FLAG) {
+            0x78 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
+                if flag.contains(CpuFlags::SIGN) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
                 }
             }),
-            0x79 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: u16| {
-                if !flag.get_bit(SIGN_FLAG) {
+            0x79 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
+                if !flag.contains(CpuFlags::SIGN) {
                     let mut sip = *ip as i16;
                     sip += (mem[(*ip + 1) as usize] as i8) as i16;
                     *ip = sip as u16;
@@ -937,11 +947,11 @@ sf: {}",
                 0
             }
             0xF8 => {
-                self.flag.set_bit(CARRY_FLAG, false);
+                self.flag.remove(CpuFlags::CARRY);
                 1
             }
             0xF9 => {
-                self.flag.set_bit(CARRY_FLAG, true);
+                self.flag.set(CpuFlags::CARRY, true);
                 1
             }
             0xFE => self.do_grp2_inst(|rm, reg, flags| {
@@ -979,7 +989,7 @@ mod tests {
         assert_eq!(cpu.dx, 0);
         assert_eq!(cpu.bp, 0);
         assert_eq!(cpu.sp, 0x0100);
-        assert_eq!(cpu.flag, 0);
+        assert_eq!(cpu.flag.bits(), 0);
 
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 69;
@@ -1004,9 +1014,9 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(cpu.dx, 70);
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
         cpu.do_cycle();
         assert_eq!(cpu.mem[102], 84);
         assert_eq!(cpu.dx, 70);
@@ -1018,9 +1028,9 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(cpu.dx, 0);
         assert_eq!(cpu.ax, 0);
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
 
         // sign flag test
         cpu.dx = 32766;
@@ -1028,30 +1038,30 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(cpu.dx, 32776);
         assert_eq!(cpu.ax, 10);
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
 
         cpu.dx = 65534;
         cpu.do_cycle();
         assert_eq!(cpu.dx, 8);
         assert_eq!(cpu.ax, 10);
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
 
         // ADD AX, BX
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ax = 0x1234;
         cpu.bx = 0x5678;
-        cpu.flag.set_bit(CARRY_FLAG, true);
+        cpu.flag.insert(CpuFlags::CARRY);
         cpu.mem[0] = 0x03;
         cpu.mem[1] = 0xc3;
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0x68AC);
         assert_eq!(cpu.bx, 0x5678);
         assert_eq!(cpu.ip, 0x02);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
 
         // MOV [BX+SI+0x1234], AX
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
@@ -1081,9 +1091,9 @@ mod tests {
         cpu.mem[0x40] = 10;
         cpu.do_cycle();
         assert_eq!(cpu.mem[0x40], 37);
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
 
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.cx = 245;
@@ -1093,9 +1103,9 @@ mod tests {
         cpu.mem[0x40] = 15;
         cpu.do_cycle();
         assert_eq!(cpu.mem[0x40], 4);
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
 
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.bx = 125;
@@ -1105,9 +1115,9 @@ mod tests {
         cpu.mem[0x40] = 10;
         cpu.do_cycle();
         assert_eq!(cpu.mem[0x40], 135);
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
 
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0x04;
@@ -1228,9 +1238,9 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0);
         assert_eq!(cpu.ip, 2);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
 
         // STC
         // ADC AX, BX
@@ -1244,7 +1254,7 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0x0003);
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
 
         // SUB AX, BX
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
@@ -1255,9 +1265,9 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0xFFFF);
         assert_eq!(cpu.ip, 2);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
 
         // add    WORD PTR ds:0x1d3,0x4c
         // 83 06 d3 01 4c
@@ -1284,9 +1294,9 @@ mod tests {
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.bx, 0x00FF);
         assert_eq!(cpu.ip, 2);
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
 
         // XOR AX, BX
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
@@ -1298,9 +1308,9 @@ mod tests {
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.bx, 0x1234);
         assert_eq!(cpu.ip, 2);
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
 
         // 80 8f d5 01 00
         // or     BYTE PTR [bx+0x1d5],0x0
@@ -1333,24 +1343,24 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(read_word(&cpu.mem, 0x01D3), 0x01E0);
         assert_eq!(cpu.ip, 0x06);
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
         cpu.ip = 0;
         write_word(&mut cpu.mem, 0x01D3, 0x00FF);
         cpu.do_cycle();
         assert_eq!(read_word(&cpu.mem, 0x01D3), 0x00FF);
         assert_eq!(cpu.ip, 0x06);
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
         cpu.ip = 0;
         write_word(&mut cpu.mem, 0x01D3, 0xFFFF);
         cpu.do_cycle();
         assert_eq!(read_word(&cpu.mem, 0x01D3), 0xFFFF);
         assert_eq!(cpu.ip, 0x06);
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
     }
 
     #[test]
@@ -1362,8 +1372,8 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 1);
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
 
         // DEC AX
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
@@ -1372,8 +1382,8 @@ mod tests {
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 1);
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
 
         // INC BYTE PTR [0x1234]
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
@@ -1384,9 +1394,9 @@ mod tests {
         cpu.mem[0x1234] = 0xFF;
         cpu.do_cycle();
         assert_eq!(cpu.mem[0x1234], 0);
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
 
         // DEC AL
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
@@ -1396,8 +1406,8 @@ mod tests {
         cpu.do_cycle();
         println!("{0:X}", cpu.ax);
         assert_eq!(cpu.ax, 0x6900);
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1414,7 +1424,7 @@ mod tests {
         cpu.do_cycle();
         cpu.do_cycle();
         assert_eq!(cpu.ip, 0x0006);
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
 
         // JMP +2
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
@@ -1458,9 +1468,9 @@ mod tests {
         cpu.mem[0] = 0xF9;
         cpu.mem[1] = 0xF8;
         cpu.do_cycle();
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
         cpu.do_cycle();
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
     }
 
     // Instruction tests
@@ -1474,9 +1484,9 @@ mod tests {
 
         assert_eq!(cpu.mem[0x1234], 0x14);
         assert_eq!(cpu.ip, 5);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1489,9 +1499,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 3);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1504,9 +1514,9 @@ mod tests {
 
         assert_eq!(cpu.bx, 0x00FF);
         assert_eq!(cpu.ip, 3);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1518,9 +1528,9 @@ mod tests {
         cpu.do_cycle();
 
         assert_eq!(cpu.ip, 5);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1533,9 +1543,9 @@ mod tests {
 
         assert_eq!(cpu.cx, 0x0000);
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1548,9 +1558,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 4);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1563,9 +1573,9 @@ mod tests {
 
         assert_eq!(cpu.bx, 0x7FFF); // Unchanged
         assert_eq!(cpu.ip, 4);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1578,9 +1588,9 @@ mod tests {
 
         assert_eq!(read_word(&cpu.mem, 0x1234), 0x0085); // 5 - (-128) = 133
         assert_eq!(cpu.ip, 6);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1593,9 +1603,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x8000);
         assert_eq!(cpu.ip, 4);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1608,9 +1618,9 @@ mod tests {
 
         assert_eq!(cpu.mem[0x1234], 0x02);
         assert_eq!(cpu.ip, 5);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1623,9 +1633,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0002); // AL = 0x02
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1638,9 +1648,9 @@ mod tests {
 
         assert_eq!(cpu.mem[0x1234], 0x00);
         assert_eq!(cpu.ip, 5);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1653,9 +1663,9 @@ mod tests {
 
         assert_eq!(cpu.mem[0x1234], 0x80);
         assert_eq!(cpu.ip, 5);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1668,9 +1678,9 @@ mod tests {
 
         assert_eq!(cpu.mem[0x1234], 0x06); // 5 - (-1) = 6 (overflow in signed)
         assert_eq!(cpu.ip, 5);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1682,9 +1692,9 @@ mod tests {
 
         assert_eq!(cpu.bx, 0x0006); // BL = 0x06 (5 - (-1))
         assert_eq!(cpu.ip, 3);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1696,9 +1706,9 @@ mod tests {
         cpu.do_cycle();
 
         assert_eq!(cpu.ip, 5);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1711,9 +1721,9 @@ mod tests {
 
         assert_eq!(cpu.mem[0x1234], 0x80); // 1 + 127 = 128 (signed -128)
         assert_eq!(cpu.ip, 5);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1726,9 +1736,9 @@ mod tests {
 
         assert_eq!(read_word(&cpu.mem, 0x1234), 0x0002);
         assert_eq!(cpu.ip, 5);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1740,9 +1750,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 3);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1755,9 +1765,9 @@ mod tests {
 
         assert_eq!(read_word(&cpu.mem, 0x1234), 0x0000);
         assert_eq!(cpu.ip, 5);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1770,9 +1780,9 @@ mod tests {
 
         assert_eq!(read_word(&cpu.mem, 0x1234), 0x0001);
         assert_eq!(cpu.ip, 5);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1785,9 +1795,9 @@ mod tests {
 
         assert_eq!(read_word(&cpu.mem, 0x1234), 0x0000);
         assert_eq!(cpu.ip, 5);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1800,9 +1810,9 @@ mod tests {
 
         assert_eq!(read_word(&cpu.mem, 0x1234), 0xFFFF);
         assert_eq!(cpu.ip, 5);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1814,9 +1824,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0080); // 0 - (-128) = 128
         assert_eq!(cpu.ip, 3);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1829,9 +1839,9 @@ mod tests {
 
         assert_eq!(read_word(&cpu.mem, 0x1234), 0x0006);
         assert_eq!(cpu.ip, 5);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1843,9 +1853,9 @@ mod tests {
 
         assert_eq!(cpu.bx, 0x0006); // 5 - (-1) = 6
         assert_eq!(cpu.ip, 3);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1857,9 +1867,9 @@ mod tests {
         cpu.do_cycle();
 
         assert_eq!(cpu.ip, 5);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1871,9 +1881,9 @@ mod tests {
         cpu.do_cycle();
 
         assert_eq!(cpu.ip, 5);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1882,14 +1892,14 @@ mod tests {
         // Instruction: ADC WORD [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x16, 0x34, 0x12, 0x01]);
         write_word(&mut cpu.mem, 0x1234, 0x0001);
-        cpu.flag.set_bit(CARRY_FLAG, true);
+        cpu.flag.insert(CpuFlags::CARRY);
         cpu.do_cycle();
 
         assert_eq!(read_word(&cpu.mem, 0x1234), 0x0003);
         assert_eq!(cpu.ip, 5);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1898,14 +1908,14 @@ mod tests {
         // Instruction: SBB WORD [0x1234], 0x01
         cpu.mem[0..5].copy_from_slice(&[0x83, 0x1E, 0x34, 0x12, 0x01]);
         write_word(&mut cpu.mem, 0x1234, 0x0005);
-        cpu.flag.set_bit(CARRY_FLAG, true);
+        cpu.flag.insert(CpuFlags::CARRY);
         cpu.do_cycle();
 
         assert_eq!(read_word(&cpu.mem, 0x1234), 0x0003);
         assert_eq!(cpu.ip, 5);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
     // ----------------------------
     // 0x1C: SBB AL, imm8 (Subtract with Borrow)
@@ -1916,14 +1926,14 @@ mod tests {
         // SBB AL, 0x01 (Subtract with borrow: AL = AL - 0x01 - CF)
         cpu.mem[0..2].copy_from_slice(&[0x1C, 0x01]);
         cpu.ax = 0x0000; // AL = 0x00
-        cpu.flag.set_bit(CARRY_FLAG, true); // Previous borrow exists
+        cpu.flag.insert(CpuFlags::CARRY); // Previous borrow exists
         cpu.do_cycle();
 
         assert_eq!(cpu.ax, 0x00FE); // 0x00 - 0x01 - 1 = 0xFE (CF=1)
         assert_eq!(cpu.ip, 2);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1932,14 +1942,14 @@ mod tests {
         // SBB AL, 0x01
         cpu.mem[0..2].copy_from_slice(&[0x1C, 0x01]);
         cpu.ax = 0x0001; // AL = 0x01
-        cpu.flag.set_bit(CARRY_FLAG, false); // No previous borrow
+        cpu.flag.remove(CpuFlags::CARRY); // No previous borrow
         cpu.do_cycle();
 
         assert_eq!(cpu.ax, 0x0000); // 0x01 - 0x01 - 0 = 0x00
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     // ----------------------------
@@ -1951,14 +1961,14 @@ mod tests {
         // SBB AX, 0x0001
         cpu.mem[0..3].copy_from_slice(&[0x1D, 0x01, 0x00]);
         cpu.ax = 0x0000;
-        cpu.flag.set_bit(CARRY_FLAG, true); // Previous borrow
+        cpu.flag.insert(CpuFlags::CARRY); // Previous borrow
         cpu.do_cycle();
 
         assert_eq!(cpu.ax, 0xFFFE); // 0x0000 - 0x0001 - 1 = 0xFFFE
         assert_eq!(cpu.ip, 3);
-        assert!(cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1967,14 +1977,14 @@ mod tests {
         // SBB AX, 0x0001
         cpu.mem[0..3].copy_from_slice(&[0x1D, 0x01, 0x00]);
         cpu.ax = 0x8000; // -32768 (signed)
-        cpu.flag.set_bit(CARRY_FLAG, false); // No borrow
+        cpu.flag.remove(CpuFlags::CARRY); // No borrow
         cpu.do_cycle();
 
         assert_eq!(cpu.ax, 0x7FFF); // -32768 - 1 = -32769
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -1983,14 +1993,14 @@ mod tests {
         // SBB AX, 0x7FFF (Subtract 32767)
         cpu.mem[0..3].copy_from_slice(&[0x1D, 0xFF, 0x7F]);
         cpu.ax = 0x8000; // -32768 (signed)
-        cpu.flag.set_bit(CARRY_FLAG, true); // Previous borrow
+        cpu.flag.insert(CpuFlags::CARRY); // Previous borrow
         cpu.do_cycle();
 
         assert_eq!(cpu.ax, 0x0000); // -32768 - 32767 - 1 = -65536 → wraps to 0x0000
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     // ----------------------------
@@ -2006,9 +2016,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -2021,9 +2031,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0080);
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     // ----------------------------
@@ -2039,9 +2049,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x8000);
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -2054,9 +2064,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0034);
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(!cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(!cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     #[test]
@@ -2069,9 +2079,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG));
-        assert!(cpu.flag.get_bit(ZERO_FLAG));
-        assert!(!cpu.flag.get_bit(SIGN_FLAG));
+        assert!(!cpu.flag.contains(CpuFlags::CARRY));
+        assert!(cpu.flag.contains(CpuFlags::ZERO));
+        assert!(!cpu.flag.contains(CpuFlags::SIGN));
     }
 
     // ----------------------------
@@ -2087,9 +2097,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x00FF);
         assert_eq!(cpu.ip, 2);
-        assert!(cpu.flag.get_bit(CARRY_FLAG), "CF should be set");
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF should be set");
+        assert!(cpu.flag.contains(CpuFlags::CARRY), "CF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::SIGN), "SF should be set");
     }
 
     #[test]
@@ -2102,9 +2112,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0000);
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
-        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
-        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::CARRY), "CF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::ZERO), "ZF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::SIGN), "SF should be clear");
     }
 
     // ----------------------------
@@ -2120,9 +2130,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x7FFF);
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::CARRY), "CF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::SIGN), "SF should be clear");
     }
 
     #[test]
@@ -2135,9 +2145,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0002);
         assert_eq!(cpu.ip, 3);
-        assert!(cpu.flag.get_bit(CARRY_FLAG), "CF should be set");
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::CARRY), "CF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::SIGN), "SF should be clear");
     }
 
     #[test]
@@ -2150,9 +2160,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0xFFFF);
         assert_eq!(cpu.ip, 3);
-        assert!(cpu.flag.get_bit(CARRY_FLAG), "CF should be set");
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF should be set");
+        assert!(cpu.flag.contains(CpuFlags::CARRY), "CF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::SIGN), "SF should be set");
     }
 
     // ----------------------------
@@ -2168,9 +2178,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0000); // 0xFF ^ 0xFF = 0x00
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
-        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
-        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::CARRY), "CF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::ZERO), "ZF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::SIGN), "SF should be clear");
     }
 
     #[test]
@@ -2183,9 +2193,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0080); // 0x00 ^ 0x80 = 0x80
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::CARRY), "CF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::SIGN), "SF should be set");
     }
 
     // ----------------------------
@@ -2201,9 +2211,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0000); // 0xFFFF ^ 0xFFFF = 0x0000
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
-        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
-        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::CARRY), "CF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::ZERO), "ZF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::SIGN), "SF should be clear");
     }
 
     #[test]
@@ -2216,9 +2226,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x8000); // 0x0000 ^ 0x8000 = 0x8000
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::CARRY), "CF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::SIGN), "SF should be set");
     }
 
     #[test]
@@ -2231,9 +2241,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0000); // 0x1234 ^ 0x1234 = 0x0000
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
-        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
-        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::CARRY), "CF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::ZERO), "ZF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::SIGN), "SF should be clear");
     }
 
     // ----------------------------
@@ -2249,9 +2259,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0005); // Register unchanged
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
-        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
-        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::CARRY), "CF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::ZERO), "ZF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::SIGN), "SF should be clear");
     }
 
     #[test]
@@ -2264,9 +2274,12 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0001); // Register unchanged
         assert_eq!(cpu.ip, 2);
-        assert!(cpu.flag.get_bit(CARRY_FLAG), "CF=1 (0x01 < 0x02 unsigned)");
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF=1 (0xFF is negative)");
+        assert!(
+            cpu.flag.contains(CpuFlags::CARRY),
+            "CF=1 (0x01 < 0x02 unsigned)"
+        );
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::SIGN), "SF=1 (0xFF is negative)");
     }
 
     #[test]
@@ -2279,9 +2292,15 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x0080); // Register unchanged
         assert_eq!(cpu.ip, 2);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF=0 (0x80 > 0x01 unsigned)");
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF=0 (0x7F is positive)");
+        assert!(
+            !cpu.flag.contains(CpuFlags::CARRY),
+            "CF=0 (0x80 > 0x01 unsigned)"
+        );
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(
+            !cpu.flag.contains(CpuFlags::SIGN),
+            "SF=0 (0x7F is positive)"
+        );
     }
 
     // ----------------------------
@@ -2297,9 +2316,9 @@ mod tests {
 
         assert_eq!(cpu.ax, 0x1234); // Register unchanged
         assert_eq!(cpu.ip, 3);
-        assert!(!cpu.flag.get_bit(CARRY_FLAG), "CF should be clear");
-        assert!(cpu.flag.get_bit(ZERO_FLAG), "ZF should be set");
-        assert!(!cpu.flag.get_bit(SIGN_FLAG), "SF should be clear");
+        assert!(!cpu.flag.contains(CpuFlags::CARRY), "CF should be clear");
+        assert!(cpu.flag.contains(CpuFlags::ZERO), "ZF should be set");
+        assert!(!cpu.flag.contains(CpuFlags::SIGN), "SF should be clear");
     }
 
     #[test]
@@ -2313,11 +2332,14 @@ mod tests {
         assert_eq!(cpu.ax, 0x0001); // Register unchanged
         assert_eq!(cpu.ip, 3);
         assert!(
-            cpu.flag.get_bit(CARRY_FLAG),
+            cpu.flag.contains(CpuFlags::CARRY),
             "CF=1 (0x0001 < 0x0002 unsigned)"
         );
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF=1 (0xFFFF is negative)");
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(
+            cpu.flag.contains(CpuFlags::SIGN),
+            "SF=1 (0xFFFF is negative)"
+        );
     }
 
     #[test]
@@ -2331,11 +2353,14 @@ mod tests {
         assert_eq!(cpu.ax, 0x0001); // Register unchanged
         assert_eq!(cpu.ip, 3);
         assert!(
-            cpu.flag.get_bit(CARRY_FLAG),
+            cpu.flag.contains(CpuFlags::CARRY),
             "CF=1 (0x0001 < 0x8000 unsigned)"
         );
-        assert!(!cpu.flag.get_bit(ZERO_FLAG), "ZF should be clear");
-        assert!(cpu.flag.get_bit(SIGN_FLAG), "SF=1 (0x8001 is negative)");
+        assert!(!cpu.flag.contains(CpuFlags::ZERO), "ZF should be clear");
+        assert!(
+            cpu.flag.contains(CpuFlags::SIGN),
+            "SF=1 (0x8001 is negative)"
+        );
     }
 
     // This is one big test that runs the program from: https://codegolf.stackexchange.com/questions/11880/emulate-an-intel-8086-cpu

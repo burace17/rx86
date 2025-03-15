@@ -2,7 +2,7 @@ use num_traits::Zero;
 
 use crate::{
     bits::Bits,
-    cpu::{CARRY_FLAG, SIGN_FLAG, ZERO_FLAG},
+    cpu::CpuFlags,
     memory::{read_word, write_word},
     traits::NumericOps,
 };
@@ -43,31 +43,31 @@ pub fn is_addressing_mode(id_mod: u8) -> bool {
     id_mod != 0b11
 }
 
-pub fn inc_reg(reg: &mut u16, flags: &mut u16) -> u16 {
+pub fn inc_reg(reg: &mut u16, flags: &mut CpuFlags) -> u16 {
     *reg = (*reg).wrapping_add(1);
-    flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
+    flags.set(CpuFlags::ZERO, *reg == 0);
+    flags.set(CpuFlags::SIGN, calc_sign_bit(*reg));
     1
 }
 
-pub fn dec_reg(reg: &mut u16, flags: &mut u16) -> u16 {
+pub fn dec_reg(reg: &mut u16, flags: &mut CpuFlags) -> u16 {
     *reg = (*reg).wrapping_sub(1);
-    flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
+    flags.set(CpuFlags::ZERO, *reg == 0);
+    flags.set(CpuFlags::SIGN, calc_sign_bit(*reg));
     1
 }
 
-pub fn inc_byte(reg: &mut u8, flags: &mut u16) -> u16 {
+pub fn inc_byte(reg: &mut u8, flags: &mut CpuFlags) -> u16 {
     *reg = (*reg).wrapping_add(1);
-    flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
+    flags.set(CpuFlags::ZERO, *reg == 0);
+    flags.set(CpuFlags::SIGN, calc_sign_bit(*reg));
     1
 }
 
-pub fn dec_byte(reg: &mut u8, flags: &mut u16) -> u16 {
+pub fn dec_byte(reg: &mut u8, flags: &mut CpuFlags) -> u16 {
     *reg = (*reg).wrapping_sub(1);
-    flags.set_bit(ZERO_FLAG, *reg == 0);
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(*reg));
+    flags.set(CpuFlags::ZERO, *reg == 0);
+    flags.set(CpuFlags::SIGN, calc_sign_bit(*reg));
     1
 }
 
@@ -117,22 +117,22 @@ where
     sum > T::max_value().upcast()
 }
 
-pub fn calc_add_flags<T>(flags: &mut u16, left: T, right: T, result: T)
+pub fn calc_add_flags<T>(flags: &mut CpuFlags, left: T, right: T, result: T)
 where
     T: NumericOps,
 {
-    flags.set_bit(CARRY_FLAG, calc_carry_bit(left, right));
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == T::zero());
+    flags.set(CpuFlags::CARRY, calc_carry_bit(left, right));
+    flags.set(CpuFlags::SIGN, calc_sign_bit(result));
+    flags.set(CpuFlags::ZERO, result == T::zero());
 }
 
-pub fn calc_sub_flags<T>(flags: &mut u16, left: T, right: T, result: T)
+pub fn calc_sub_flags<T>(flags: &mut CpuFlags, left: T, right: T, result: T)
 where
     T: NumericOps,
 {
-    flags.set_bit(CARRY_FLAG, left < right);
-    flags.set_bit(SIGN_FLAG, calc_sign_bit(result));
-    flags.set_bit(ZERO_FLAG, result == T::zero());
+    flags.set(CpuFlags::CARRY, left < right);
+    flags.set(CpuFlags::SIGN, calc_sign_bit(result));
+    flags.set(CpuFlags::ZERO, result == T::zero());
 }
 
 #[cfg(test)]
