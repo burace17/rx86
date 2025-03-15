@@ -102,6 +102,26 @@ pub fn mov_reg_imm_byte(reg: &mut u16, imm: u8, high: bool) -> u16 {
     2
 }
 
+fn jmp(mem: &[u8], ip: &mut u16) {
+    let mut sip = *ip as i16;
+    sip += (mem[(*ip + 1) as usize] as i8) as i16;
+    *ip = sip as u16;
+}
+
+pub fn jmp_if_any_set(mem: &[u8], ip: &mut u16, flags: CpuFlags, mask: CpuFlags) -> u16 {
+    if flags.intersects(mask) {
+        jmp(mem, ip);
+    }
+    2
+}
+
+pub fn jmp_if_none_set(mem: &[u8], ip: &mut u16, flags: CpuFlags, mask: CpuFlags) -> u16 {
+    if (flags & mask).is_empty() {
+        jmp(mem, ip);
+    }
+    2
+}
+
 pub fn calc_sign_bit<T>(val: T) -> bool
 where
     T: NumericOps,

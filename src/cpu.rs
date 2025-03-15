@@ -1,8 +1,8 @@
 use crate::bits::Bits;
 use crate::instructions::{
     calc_add_flags, calc_sign_bit, calc_sub_flags, dec_byte, dec_reg, inc_byte, inc_reg,
-    is_addressing_mode, mov_reg_imm_byte, mov_reg_imm_word, parse_mod_rm_byte, pop_reg, push_reg,
-    swap_reg, ModRmByte, RegisterOrMemory,
+    is_addressing_mode, jmp_if_any_set, jmp_if_none_set, mov_reg_imm_byte, mov_reg_imm_word,
+    parse_mod_rm_byte, pop_reg, push_reg, swap_reg, ModRmByte, RegisterOrMemory,
 };
 use crate::memory::{read_word, write_word};
 use crate::operations::swap_args;
@@ -703,15 +703,6 @@ sf: {:?}",
         1
     }
 
-    // I don't know what to call this
-    fn do_ip_inst<F>(&mut self, op: F) -> u16
-    where
-        F: Fn(&[u8], &mut u16, CpuFlags),
-    {
-        op(&self.mem, &mut self.ip, self.flag);
-        2
-    }
-
     pub fn do_cycle(&mut self) -> bool {
         let opcode = self.mem[self.ip as usize];
 
@@ -816,56 +807,24 @@ sf: {:?}",
             0x5D => pop_reg(&self.mem, &mut self.sp, &mut self.bp),
             0x5E => pop_reg(&self.mem, &mut self.sp, &mut self.si),
             0x5F => pop_reg(&self.mem, &mut self.sp, &mut self.di),
-            // TODO this can be generalized a bit...
-            0x72 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
-                if flag.contains(CpuFlags::CARRY) {
-                    let mut sip = *ip as i16;
-                    sip += (mem[(*ip + 1) as usize] as i8) as i16;
-                    *ip = sip as u16;
-                }
-            }),
-            0x74 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
-                if flag.contains(CpuFlags::ZERO) {
-                    let mut sip = *ip as i16;
-                    sip += (mem[(*ip + 1) as usize] as i8) as i16;
-                    *ip = sip as u16;
-                }
-            }),
-            0x75 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
-                if !flag.contains(CpuFlags::ZERO) {
-                    let mut sip = *ip as i16;
-                    sip += (mem[(*ip + 1) as usize] as i8) as i16;
-                    *ip = sip as u16;
-                }
-            }),
-            0x76 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
-                if flag.contains(CpuFlags::CARRY) || flag.contains(CpuFlags::ZERO) {
-                    let mut sip = *ip as i16;
-                    sip += (mem[(*ip + 1) as usize] as i8) as i16;
-                    *ip = sip as u16;
-                }
-            }),
-            0x77 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
-                if !flag.contains(CpuFlags::CARRY) && !flag.contains(CpuFlags::ZERO) {
-                    let mut sip = *ip as i16;
-                    sip += (mem[(*ip + 1) as usize] as i8) as i16;
-                    *ip = sip as u16;
-                }
-            }),
-            0x78 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
-                if flag.contains(CpuFlags::SIGN) {
-                    let mut sip = *ip as i16;
-                    sip += (mem[(*ip + 1) as usize] as i8) as i16;
-                    *ip = sip as u16;
-                }
-            }),
-            0x79 => self.do_ip_inst(|mem: &[u8], ip: &mut u16, flag: CpuFlags| {
-                if !flag.contains(CpuFlags::SIGN) {
-                    let mut sip = *ip as i16;
-                    sip += (mem[(*ip + 1) as usize] as i8) as i16;
-                    *ip = sip as u16;
-                }
-            }),
+            0x72 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::CARRY),
+            0x73 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::CARRY),
+            0x74 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::ZERO),
+            0x75 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::ZERO),
+            0x76 => jmp_if_any_set(
+                &self.mem,
+                &mut self.ip,
+                self.flag,
+                CpuFlags::CARRY | CpuFlags::ZERO,
+            ),
+            0x77 => jmp_if_none_set(
+                &self.mem,
+                &mut self.ip,
+                self.flag,
+                CpuFlags::CARRY | CpuFlags::ZERO,
+            ),
+            0x78 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::SIGN),
+            0x79 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::SIGN),
             0x80 => self.do_opext_inst(false, false),
             0x81 => self.do_opext_inst(true, false),
             0x82 => self.do_opext_inst(false, false),
@@ -964,7 +923,7 @@ sf: {:?}",
 
             _ => self.cpu_panic("Unknown instruction"),
         };
-        self.ip += ip_increment;
+        self.ip = self.ip.wrapping_add(ip_increment);
         should_continue_emulation
     }
 }
@@ -2361,6 +2320,147 @@ mod tests {
             cpu.flag.contains(CpuFlags::SIGN),
             "SF=1 (0x8001 is negative)"
         );
+    }
+
+    // ----------------------------
+    // 0x72: JB (CF=1)
+    // ----------------------------
+    #[test]
+    fn test_72_jb_taken() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x72, 0x02]); // JB +2
+        cpu.flag.set(CpuFlags::CARRY, true);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04); // 0x00 + 2 + 0x02
+    }
+
+    // ----------------------------
+    // 0x73: JNB (CF=0)
+    // ----------------------------
+    #[test]
+    fn test_73_jnb_taken() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x73, 0xFE]); // JNB -2
+        cpu.flag.set(CpuFlags::CARRY, false);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x00); // 0x00 + 2 - 2 (signed)
+    }
+
+    // ----------------------------
+    // 0x74: JZ (ZF=1)
+    // ----------------------------
+    #[test]
+    fn test_74_jz_taken() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x74, 0x04]); // JZ +4
+        cpu.flag.set(CpuFlags::ZERO, true);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x06); // 0x00 + 2 + 0x04
+    }
+
+    // ----------------------------
+    // 0x75: JNZ (ZF=0)
+    // ----------------------------
+    #[test]
+    fn test_75_jnz_taken() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x75, 0x04]); // JNZ +4
+        cpu.flag.set(CpuFlags::ZERO, false);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x06);
+    }
+
+    // ----------------------------
+    // 0x76: JBE (CF=1 || ZF=1)
+    // ----------------------------
+    #[test]
+    fn test_76_jbe_taken() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x76, 0x02]); // JBE +2
+        cpu.flag.set(CpuFlags::CARRY, true);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x77: JNBE (CF=0 && ZF=0)
+    // ----------------------------
+    #[test]
+    fn test_77_jnbe_taken() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x77, 0x02]); // JNBE +2
+        cpu.flag.set(CpuFlags::CARRY, false);
+        cpu.flag.set(CpuFlags::ZERO, false);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x78: JS (SF=1)
+    // ----------------------------
+    #[test]
+    fn test_78_js_taken() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x78, 0x02]); // JS +2
+        cpu.flag.set(CpuFlags::SIGN, true);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x79: JNS (SF=0)
+    // ----------------------------
+    #[test]
+    fn test_79_jns_taken() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x79, 0x02]); // JNS +2
+        cpu.flag.set(CpuFlags::SIGN, false);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x78: JS (SF=1) - Jump Not Taken
+    // ----------------------------
+    #[test]
+    fn test_78_js_not_taken() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x78, 0x02]); // JS +2
+        cpu.flag.set(CpuFlags::SIGN, false); // SF=0
+        cpu.do_cycle();
+
+        // Should NOT jump - IP advances by 2 bytes
+        assert_eq!(cpu.ip, 0x02, "IP should advance past instruction");
+    }
+
+    // ----------------------------
+    // 0x77: JNBE (CF=0 & ZF=0) - Jump Not Taken (CF=1 case)
+    // ----------------------------
+    #[test]
+    fn test_77_jnbe_not_taken_cf() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x77, 0x04]); // JNBE +4
+        cpu.flag.set(CpuFlags::CARRY, true); // CF=1 blocks jump
+        cpu.flag.set(CpuFlags::ZERO, false);
+        cpu.do_cycle();
+
+        // Should NOT jump - IP advances by 2 bytes
+        assert_eq!(cpu.ip, 0x02, "IP should ignore jump when CF=1");
+    }
+
+    // ----------------------------
+    // 0x77: JNBE (CF=0 & ZF=0) - Jump Not Taken (ZF=1 case)
+    // ----------------------------
+    #[test]
+    fn test_77_jnbe_not_taken_zf() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x77, 0x04]); // JNBE +4
+        cpu.flag.set(CpuFlags::CARRY, false);
+        cpu.flag.set(CpuFlags::ZERO, true); // ZF=1 blocks jump
+        cpu.do_cycle();
+
+        // Should NOT jump - IP advances by 2 bytes
+        assert_eq!(cpu.ip, 0x02, "IP should ignore jump when ZF=1");
     }
 
     // This is one big test that runs the program from: https://codegolf.stackexchange.com/questions/11880/emulate-an-intel-8086-cpu
