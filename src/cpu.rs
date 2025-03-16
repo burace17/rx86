@@ -22,7 +22,7 @@ pub const SIGN_FLAG: u16 = 7;
 // static OVERFLOW_FLAG: u16 = 11;
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Default)]
     pub struct CpuFlags: u16 {
         const CARRY = 1 << CARRY_FLAG;
         const ZERO = 1 << ZERO_FLAG;
@@ -30,6 +30,7 @@ bitflags! {
     }
 }
 
+#[derive(Default)]
 pub struct Cpu {
     // Registers
     ax: u16,
@@ -42,6 +43,7 @@ pub struct Cpu {
     sp: u16,
     ip: u16,
 
+    seg_override: Option<SegmentOverride>,
     cs: u16,
     ds: u16,
     ss: u16,
@@ -51,6 +53,13 @@ pub struct Cpu {
     mem: Box<[u8]>,
 
     pub breakpoints: Vec<u16>,
+}
+
+enum SegmentOverride {
+    Code,
+    Data,
+    Stack,
+    Extra
 }
 
 enum CpuBreakReason {
@@ -68,22 +77,8 @@ enum CpuBreakResult {
 impl Cpu {
     pub fn new(mem: Box<[u8]>) -> Cpu {
         Cpu {
-            ax: 0,
-            bx: 0,
-            cx: 0,
-            dx: 0,
-            si: 0,
-            di: 0,
-            bp: 0,
-            sp: 0x100,
-            ip: 0,
-            cs: 0,
-            ds: 0,
-            ss: 0,
-            es: 0,
-            flag: CpuFlags::empty(),
             mem,
-            breakpoints: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -628,14 +623,16 @@ sf: {:?}",
         3
     }
 
-    // fn do_imm_inst<F>(&mut self, op: F) -> u16
-    // where
-    //     F: Fn(u16, u16, &mut u16),
-    // {
-    //     let imm = read_word(&self.mem, self.ip as usize + 2);
-    //     op(self.ip, imm, &mut self.flag);
-    //     2
-    // }
+    fn do_cycle_with_segment_override(&mut self, seg_override: SegmentOverride) -> u16 {
+        if self.seg_override.is_some() {
+            self.cpu_panic("do_cycle_with_segment_override: seg_override already set!");
+        }
+        self.seg_override = Some(seg_override);
+        self.ip += 1;
+        self.do_cycle();
+        self.seg_override = None;
+        0
+    }
 
     fn do_sp_inst<F>(&mut self, op: F) -> u16
     where
@@ -689,24 +686,28 @@ sf: {:?}",
             0x23 => self.do_word_inst(swap_args(operations::bitwise_and)),
             0x24 => self.do_ax_byte_inst(operations::bitwise_and),
             0x25 => self.do_ax_word_inst(operations::bitwise_and),
+            0x26 => self.do_cycle_with_segment_override(SegmentOverride::Extra),
             0x28 => self.do_byte_inst(operations::sub),
             0x29 => self.do_word_inst(operations::sub),
             0x2A => self.do_byte_inst(swap_args(operations::sub)),
             0x2B => self.do_word_inst(swap_args(operations::sub)),
             0x2C => self.do_ax_byte_inst(operations::sub),
             0x2D => self.do_ax_word_inst(operations::sub),
+            0x2E => self.do_cycle_with_segment_override(SegmentOverride::Code),
             0x30 => self.do_byte_inst(operations::bitwise_xor),
             0x31 => self.do_word_inst(operations::bitwise_xor),
             0x32 => self.do_byte_inst(swap_args(operations::bitwise_xor)),
             0x33 => self.do_word_inst(swap_args(operations::bitwise_xor)),
             0x34 => self.do_ax_byte_inst(operations::bitwise_xor),
             0x35 => self.do_ax_word_inst(operations::bitwise_xor),
+            0x36 => self.do_cycle_with_segment_override(SegmentOverride::Stack),
             0x38 => self.do_byte_inst(operations::cmp),
             0x39 => self.do_word_inst(operations::cmp),
             0x3A => self.do_byte_inst(swap_args(operations::cmp)),
             0x3B => self.do_word_inst(swap_args(operations::cmp)),
             0x3C => self.do_ax_byte_inst(operations::cmp),
             0x3D => self.do_ax_word_inst(operations::cmp),
+            0x3E => self.do_cycle_with_segment_override(SegmentOverride::Data),
             0x40 => inc_reg(&mut self.ax, &mut self.flag),
             0x41 => inc_reg(&mut self.cx, &mut self.flag),
             0x42 => inc_reg(&mut self.dx, &mut self.flag),
@@ -872,6 +873,7 @@ mod tests {
         // NOP
         let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0] = 0x90;
+        cpu.sp = 0x0100;
         cpu.do_cycle();
         assert_eq!(cpu.ip, 1);
         assert_eq!(cpu.ax, 0);
@@ -2472,6 +2474,7 @@ mod tests {
         let reference_program = include_bytes!("../test/codegolf_reference_program");
         let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0..reference_program.len()].copy_from_slice(reference_program);
+        cpu.sp = 0x100;
         cpu.emulate();
         assert_eq!(cpu.mem[0x8000..0x87D0], *reference_output);
     }
