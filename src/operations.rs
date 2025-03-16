@@ -75,6 +75,20 @@ where
     only_flags(sub)(rm, reg, flags);
 }
 
+pub fn xchg<T>(rm: &mut T, reg: &mut T, _flags: &mut CpuFlags)
+where
+    T: NumericOps,
+{
+    std::mem::swap(rm, reg);
+}
+
+pub fn mov<T>(rm: &mut T, reg: &mut T, _flags: &mut CpuFlags)
+where
+    T: NumericOps,
+{
+    *rm = *reg;
+}
+
 pub fn bitwise_or<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
 where
     T: NumericOps,

@@ -737,24 +737,12 @@ sf: {:?}",
             0x81 => self.do_opext_inst(true, false),
             0x82 => self.do_opext_inst(false, false),
             0x83 => self.do_opext_inst(true, true),
-            0x86 => self.do_byte_inst(|rm, reg, _flag| {
-                mem::swap(rm, reg);
-            }),
-            0x87 => self.do_word_inst(|rm, reg, _flag| {
-                mem::swap(rm, reg);
-            }),
-            0x88 => self.do_byte_inst(|rm, reg, _flag| {
-                *rm = *reg;
-            }),
-            0x89 => self.do_word_inst(|rm, reg, _flag| {
-                *rm = *reg;
-            }),
-            0x8A => self.do_byte_inst(|rm, reg, _flag| {
-                *reg = *rm;
-            }),
-            0x8B => self.do_word_inst(|rm, reg, _flag| {
-                *reg = *rm;
-            }),
+            0x86 => self.do_byte_inst(operations::xchg),
+            0x87 => self.do_word_inst(operations::xchg),
+            0x88 => self.do_byte_inst(operations::mov),
+            0x89 => self.do_word_inst(operations::mov),
+            0x8A => self.do_byte_inst(swap_args(operations::mov)),
+            0x8B => self.do_word_inst(swap_args(operations::mov)),
             0x90 => 1,
             0x91 => swap_reg(&mut self.ax, &mut self.cx),
             0x92 => swap_reg(&mut self.ax, &mut self.dx),
