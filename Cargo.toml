@@ -2,7 +2,7 @@
 name = "rx86"
 version = "0.1.0"
 authors = ["Blair Urish <burace17@gmail.com>"]
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 bitflags = "2.9.0"

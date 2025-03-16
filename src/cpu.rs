@@ -1,8 +1,8 @@
 use crate::bits::Bits;
 use crate::instructions::{
-    dec_byte, dec_reg, inc_byte, inc_reg, is_addressing_mode, jmp_if_any_set, jmp_if_none_set,
-    mov_reg_imm_byte, mov_reg_imm_word, parse_mod_rm_byte, pop_reg, push_reg, swap_reg, ModRmByte,
-    RegisterOrMemory,
+    ModRmByte, RegisterOrMemory, dec_byte, dec_reg, inc_byte, inc_reg, is_addressing_mode,
+    jmp_if_any_set, jmp_if_none_set, mov_reg_imm_byte, mov_reg_imm_word, parse_mod_rm_byte,
+    pop_reg, push_reg, swap_reg,
 };
 use crate::memory::{read_word, write_word};
 use crate::operations;
@@ -59,7 +59,7 @@ enum SegmentOverride {
     Code,
     Data,
     Stack,
-    Extra
+    Extra,
 }
 
 enum CpuBreakReason {
@@ -394,7 +394,10 @@ sf: {:?}",
         )
     }
 
-    fn get_opext_group1_inst<T>(&self, id_reg: u8) -> impl Fn(&mut T, &mut T, &mut CpuFlags)
+    fn get_opext_group1_inst<T>(
+        &self,
+        id_reg: u8,
+    ) -> impl Fn(&mut T, &mut T, &mut CpuFlags) + use<T>
     where
         T: NumericOps,
     {
@@ -863,8 +866,8 @@ sf: {:?}",
 
 #[cfg(test)]
 mod tests {
-    use crate::cpu::*;
     use crate::Cpu;
+    use crate::cpu::*;
 
     const TEST_MEM_SIZE: usize = 65535;
 
