@@ -10,7 +10,6 @@ use crate::operations::swap_args;
 use crate::traits::NumericOps;
 use bitflags::bitflags;
 use std::io;
-use std::mem;
 
 pub const CARRY_FLAG: u16 = 0;
 // static PARITY_FLAG: u16 = 2;
@@ -287,6 +286,26 @@ sf: {:?}",
         }
     }
 
+    fn get_segment_register_value_by_modrm_reg_code(&self, reg_code: u8) -> u16 {
+        match reg_code {
+            0b000 => self.es,
+            0b001 => self.cs,
+            0b010 => self.ss,
+            0b011 => self.ds,
+            _ => self.cpu_panic("set_reg_byte_code: failed to parse REG bits of mod R/M"),
+        }
+    }
+
+    fn set_segment_register_value_by_modrm_reg_code(&mut self, reg_code: u8, value: u16) {
+        match reg_code {
+            0b000 => self.es = value,
+            0b001 => println!("warning: ignoring write to CS"),
+            0b010 => self.ss = value,
+            0b011 => self.ds = value,
+            _ => self.cpu_panic("set_reg_byte_code: failed to parse REG bits of mod R/M"),
+        }
+    }
+
     // From a the mod and rm parts of the modrm byte, return the memory address and instruction length so far
     fn read_address_from_modrm(&self, id_mod: u8, id_rm: u8) -> (u16, u16) {
         // Operand is a memory address.
@@ -470,6 +489,21 @@ sf: {:?}",
             op,
             |cpu, modrm_byte, _| cpu.get_register_value_by_modrm_reg_code(modrm_byte.id_reg),
             Self::set_register_value_by_modrm_reg_code,
+            0,
+            2,
+        )
+    }
+
+    fn do_segment_reg_inst<F>(&mut self, op: F) -> u16
+    where
+        F: Fn(&mut u16, &mut u16, &mut CpuFlags),
+    {
+        self.do_modrm_word_inst(
+            op,
+            |cpu, modrm_byte, _| {
+                cpu.get_segment_register_value_by_modrm_reg_code(modrm_byte.id_reg)
+            },
+            Self::set_segment_register_value_by_modrm_reg_code,
             0,
             2,
         )
@@ -743,6 +777,8 @@ sf: {:?}",
             0x89 => self.do_word_inst(operations::mov),
             0x8A => self.do_byte_inst(swap_args(operations::mov)),
             0x8B => self.do_word_inst(swap_args(operations::mov)),
+            0x8C => self.do_segment_reg_inst(operations::mov),
+            0x8E => self.do_segment_reg_inst(swap_args(operations::mov)),
             0x90 => 1,
             0x91 => swap_reg(&mut self.ax, &mut self.cx),
             0x92 => swap_reg(&mut self.ax, &mut self.dx),
@@ -2357,6 +2393,75 @@ mod tests {
 
         // Should NOT jump - IP advances by 2 bytes
         assert_eq!(cpu.ip, 0x02, "IP should ignore jump when ZF=1");
+    }
+
+    // ----------------------------
+    // 0x8C: MOV r/m16, Sreg
+    // ----------------------------
+    #[test]
+    fn test_8c_mov_ax_ds() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // MOV AX, DS
+        cpu.mem[0..2].copy_from_slice(&[0x8C, 0xD8]); // ModR/M: 11 11 000 (DS → AX)
+        cpu.ds = 0x1234;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ax, 0x1234);
+        assert_eq!(cpu.ip, 2);
+    }
+
+    #[test]
+    fn test_8c_mov_mem_es() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // MOV [0x5678], ES
+        cpu.mem[0..4].copy_from_slice(&[0x8C, 0x06, 0x78, 0x56]); // ModR/M: 00 00 110 (ES → [0x5678])
+        cpu.es = 0xABCD;
+        cpu.do_cycle();
+
+        assert_eq!(read_word(&cpu.mem, 0x5678), 0xABCD);
+        assert_eq!(cpu.ip, 4);
+    }
+
+    // ----------------------------
+    // 0x8E: MOV Sreg, r/m16
+    // ----------------------------
+    #[test]
+    fn test_8e_mov_ds_ax() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // MOV DS, AX
+        cpu.mem[0..2].copy_from_slice(&[0x8E, 0xD8]); // ModR/M: 11 11 000 (AX → DS)
+        cpu.ax = 0x5678;
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ds, 0x5678);
+        assert_eq!(cpu.ip, 2);
+    }
+
+    #[test]
+    fn test_8e_mov_ss_mem() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // MOV SS, [0x1234]
+        cpu.mem[0..4].copy_from_slice(&[0x8E, 0x16, 0x34, 0x12]); // ModR/M: 00 10 110 (SS ← [0x1234])
+        write_word(&mut cpu.mem, 0x1234, 0xDEAD);
+        cpu.do_cycle();
+
+        assert_eq!(cpu.ss, 0xDEAD);
+        assert_eq!(cpu.ip, 4);
+    }
+
+    // Edge Case: MOV CS, AX (invalid but technically encodable)
+    #[test]
+    fn test_8e_mov_cs_ax() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        // MOV CS, AX
+        cpu.mem[0..2].copy_from_slice(&[0x8E, 0xC8]); // ModR/M: 11 01 000 (CS ← AX)
+        cpu.ax = 0x1234;
+        let original_cs = cpu.cs;
+        cpu.do_cycle();
+
+        // Most 8086 emulators ignore writes to CS via MOV
+        assert_eq!(cpu.cs, original_cs, "CS should remain unchanged");
+        assert_eq!(cpu.ip, 2);
     }
 
     // This is one big test that runs the program from: https://codegolf.stackexchange.com/questions/11880/emulate-an-intel-8086-cpu
