@@ -1,8 +1,7 @@
 use crate::bits::Bits;
 use crate::instructions::{
     ModRmByte, RegisterOrMemory, dec_byte, dec_reg, inc_byte, inc_reg, is_addressing_mode,
-    jmp_if_any_set, jmp_if_none_set, mov_reg_imm_byte, mov_reg_imm_word, parse_mod_rm_byte,
-    pop_reg, push_reg, swap_reg,
+    jmp_if_any_set, jmp_if_none_set, parse_mod_rm_byte, swap_reg,
 };
 use crate::memory::{read_word, write_word};
 use crate::operations;
@@ -55,11 +54,41 @@ pub struct Cpu {
     pub breakpoints: Vec<u16>,
 }
 
+#[derive(Copy, Clone)]
 enum SegmentOverride {
     Code,
     Data,
     Stack,
     Extra,
+}
+
+#[derive(Copy, Clone)]
+#[allow(unused)]
+enum CpuMemoryAccessType {
+    InstructionFetch,
+    StackOperation,
+    Variable,
+    StringSource,
+    StringDestination,
+    BpBaseRegister,
+}
+
+#[derive(Copy, Clone)]
+enum CpuRegister {
+    Ax,
+    Bx,
+    Cx,
+    Dx,
+    Si,
+    Di,
+    Bp,
+    Sp,
+    Ip,
+
+    Cs,
+    Ds,
+    Ss,
+    Es,
 }
 
 enum CpuBreakReason {
@@ -152,14 +181,31 @@ sf: {:?}",
         }
     }
 
+    fn debug_extract_segment_and_offset(input: &str) -> Option<(u16, u16)> {
+        // FIXME: can handle errors better here
+        let parts: Vec<&str> = input.split(":").collect();
+        if parts.len() == 2 {
+            // FIXME: should also support just specifying the name of a segment register rather than only an offset
+            let segment = u16::from_str_radix(parts[0], 16).unwrap();
+            let offset = u16::from_str_radix(parts[1], 16).unwrap();
+            Some((segment, offset))
+        } else {
+            None
+        }
+    }
+
     fn debug_read_memory_command(&self, input: &str, read_word: bool) {
+        // FIXME: can handle errors better here
         let parts: Vec<&str> = input.split_whitespace().collect();
         if parts.len() == 2 {
-            let addr = u16::from_str_radix(parts[1], 16).unwrap();
-            if read_word {
-                println!("0x{:X}", crate::cpu::read_word(&self.mem, addr as usize));
-            } else {
-                println!("0x{:X}", self.mem[addr as usize]);
+            //let addr = u16::from_str_radix(parts[1], 16).unwrap();
+            if let Some((segment, offset)) = Self::debug_extract_segment_and_offset(parts[1]) {
+                let ea = Self::compute_effective_address(segment, offset);
+                if read_word {
+                    println!("0x{:X}", crate::cpu::read_word(&self.mem, ea));
+                } else {
+                    println!("0x{:X}", self.mem[ea]);
+                }
             }
         } else {
             println!("Invalid read command. Usage: read_<byte/word> <address>");
@@ -167,7 +213,7 @@ sf: {:?}",
     }
 
     fn debug_break(&self, reason: CpuBreakReason) -> CpuBreakResult {
-        let opcode = self.mem[self.ip as usize];
+        let opcode = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip);
         match reason {
             CpuBreakReason::Breakpoint => {
                 println!(
@@ -223,6 +269,149 @@ sf: {:?}",
         #[cfg(not(test))]
         self.debug_break(CpuBreakReason::Panic(msg.to_owned()));
         panic!("{}", msg);
+    }
+
+    fn uses_current_segment_override(&self, access_type: CpuMemoryAccessType) -> bool {
+        match self.seg_override {
+            Some(seg_override) => match seg_override {
+                SegmentOverride::Code => {
+                    matches!(access_type, CpuMemoryAccessType::InstructionFetch)
+                }
+                SegmentOverride::Data => {
+                    matches!(
+                        access_type,
+                        CpuMemoryAccessType::Variable | CpuMemoryAccessType::StringSource
+                    )
+                }
+                SegmentOverride::Extra => matches!(access_type, CpuMemoryAccessType::Variable),
+                SegmentOverride::Stack => {
+                    matches!(access_type, CpuMemoryAccessType::StackOperation)
+                }
+            },
+            None => false,
+        }
+    }
+
+    fn get_active_segment_base(&self, access_type: CpuMemoryAccessType) -> u16 {
+        (match self.seg_override {
+            Some(seg_override) if self.uses_current_segment_override(access_type) => {
+                match seg_override {
+                    SegmentOverride::Code => self.cs,
+                    SegmentOverride::Data => self.ds,
+                    SegmentOverride::Extra => self.es,
+                    SegmentOverride::Stack => self.ss,
+                }
+            }
+            Some(_) | None => match access_type {
+                CpuMemoryAccessType::InstructionFetch => self.cs,
+                CpuMemoryAccessType::StackOperation => self.ss,
+                CpuMemoryAccessType::Variable => self.ds,
+                CpuMemoryAccessType::StringSource => self.ds,
+                CpuMemoryAccessType::StringDestination => self.es,
+                CpuMemoryAccessType::BpBaseRegister => self.ss,
+            },
+        }) as _
+    }
+
+    fn compute_effective_address(segment: u16, offset: u16) -> usize {
+        let segment = segment as usize;
+        let offset = offset as usize;
+        segment * 0x10 + offset
+    }
+
+    fn read_mem_byte(&self, access_type: CpuMemoryAccessType, segment_offset: u16) -> u8 {
+        let target_segment = self.get_active_segment_base(access_type);
+        let effective_address = Self::compute_effective_address(target_segment, segment_offset);
+        self.mem[effective_address]
+    }
+
+    fn read_mem_word(&self, access_type: CpuMemoryAccessType, segment_offset: u16) -> u16 {
+        let target_segment = self.get_active_segment_base(access_type);
+        let effective_address = Self::compute_effective_address(target_segment, segment_offset);
+        read_word(&self.mem, effective_address)
+    }
+
+    fn write_mem_byte(&mut self, access_type: CpuMemoryAccessType, segment_offset: u16, value: u8) {
+        let target_segment = self.get_active_segment_base(access_type);
+        let effective_address = Self::compute_effective_address(target_segment, segment_offset);
+        self.mem[effective_address] = value;
+    }
+
+    fn write_mem_word(
+        &mut self,
+        access_type: CpuMemoryAccessType,
+        segment_offset: u16,
+        value: u16,
+    ) {
+        let target_segment = self.get_active_segment_base(access_type);
+        let effective_address = Self::compute_effective_address(target_segment, segment_offset);
+        write_word(&mut self.mem, effective_address, value);
+    }
+
+    fn get_register_value(&self, target_register: CpuRegister) -> u16 {
+        match target_register {
+            CpuRegister::Ax => self.ax,
+            CpuRegister::Bx => self.bx,
+            CpuRegister::Cx => self.cx,
+            CpuRegister::Dx => self.dx,
+            CpuRegister::Si => self.si,
+            CpuRegister::Di => self.di,
+            CpuRegister::Bp => self.bp,
+            CpuRegister::Sp => self.sp,
+            CpuRegister::Ip => self.ip,
+
+            CpuRegister::Cs => self.cs,
+            CpuRegister::Ds => self.ds,
+            CpuRegister::Ss => self.ss,
+            CpuRegister::Es => self.es,
+        }
+    }
+
+    fn get_register_byte_value(&self, target_register: CpuRegister, high: bool) -> u8 {
+        match target_register {
+            CpuRegister::Ax if high => self.ax.get_high(),
+            CpuRegister::Ax => self.ax.get_low(),
+            CpuRegister::Bx if high => self.bx.get_high(),
+            CpuRegister::Bx => self.bx.get_low(),
+            CpuRegister::Cx if high => self.cx.get_high(),
+            CpuRegister::Cx => self.cx.get_low(),
+            CpuRegister::Dx if high => self.dx.get_high(),
+            CpuRegister::Dx => self.dx.get_low(),
+            _ => unreachable!(),
+        }
+    }
+
+    fn set_register_value(&mut self, target_register: CpuRegister, value: u16) {
+        match target_register {
+            CpuRegister::Ax => self.ax = value,
+            CpuRegister::Bx => self.bx = value,
+            CpuRegister::Cx => self.cx = value,
+            CpuRegister::Dx => self.dx = value,
+            CpuRegister::Si => self.si = value,
+            CpuRegister::Di => self.di = value,
+            CpuRegister::Bp => self.bp = value,
+            CpuRegister::Sp => self.sp = value,
+            CpuRegister::Ip => self.ip = value,
+
+            CpuRegister::Cs => self.cs = value,
+            CpuRegister::Ds => self.ds = value,
+            CpuRegister::Ss => self.ss = value,
+            CpuRegister::Es => self.es = value,
+        }
+    }
+
+    fn set_register_byte_value(&mut self, target_register: CpuRegister, high: bool, value: u8) {
+        match target_register {
+            CpuRegister::Ax if high => self.ax.set_high(value),
+            CpuRegister::Ax => self.ax.set_low(value),
+            CpuRegister::Bx if high => self.bx.set_high(value),
+            CpuRegister::Bx => self.bx.set_low(value),
+            CpuRegister::Cx if high => self.cx.set_high(value),
+            CpuRegister::Cx => self.cx.set_low(value),
+            CpuRegister::Dx if high => self.dx.set_high(value),
+            CpuRegister::Dx => self.dx.set_low(value),
+            _ => unreachable!(),
+        }
     }
 
     fn get_register_value_by_modrm_reg_code(&self, reg_code: u8) -> u16 {
@@ -304,7 +493,6 @@ sf: {:?}",
     // From a the mod and rm parts of the modrm byte, return the memory address and instruction length so far
     fn read_address_from_modrm(&self, id_mod: u8, id_rm: u8) -> (u16, u16) {
         // Operand is a memory address.
-        let ip = self.ip as usize;
         let mut instruction_length = 2;
         let mut address = match id_rm {
             0x00 => self.bx.wrapping_add(self.si),
@@ -313,7 +501,9 @@ sf: {:?}",
             0x03 => self.bp.wrapping_add(self.di),
             0x04 => self.si,
             0x05 => self.di,
-            0x06 if id_mod == 0 => read_word(&self.mem, ip + 2),
+            0x06 if id_mod == 0 => {
+                self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 2)
+            }
             0x06 => self.bp,
             0x07 => self.bx,
             _ => self.cpu_panic("read_address_from_modrm: failed to parse R/M bits of mod R/M"),
@@ -325,13 +515,13 @@ sf: {:?}",
         }
 
         if id_mod == 0x01 {
-            let dc = self.mem[ip + 2] as i16;
+            let dc = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 2) as i16;
             let mut signed_address = address as i16;
             signed_address += dc;
             address = signed_address as u16;
             instruction_length = 4;
         } else if id_mod == 0x02 {
-            let dw = read_word(&self.mem, ip + 2) as i16;
+            let dw = self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 2) as i16;
             let mut signed_address = address as i16;
             signed_address += dw;
             address = signed_address as u16;
@@ -376,13 +566,17 @@ sf: {:?}",
         self.do_modrm_inst(
             op,
             |cpu, reg_or_mem| match reg_or_mem {
-                RegisterOrMemory::Memory(address) => cpu.mem[address as usize],
+                RegisterOrMemory::Memory(address) => {
+                    cpu.read_mem_byte(CpuMemoryAccessType::Variable, address)
+                }
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.get_register_byte_value_by_modrm_reg_code(reg_code)
                 }
             },
             |cpu, reg_or_mem, value| match reg_or_mem {
-                RegisterOrMemory::Memory(address) => cpu.mem[address as usize] = value,
+                RegisterOrMemory::Memory(address) => {
+                    cpu.write_mem_byte(CpuMemoryAccessType::Variable, address, value)
+                }
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.set_register_byte_value_by_modrm_reg_code(reg_code, value)
                 }
@@ -415,8 +609,7 @@ sf: {:?}",
     }
 
     fn do_opext_inst(&mut self, word_inst: bool, imm_byte: bool) -> u16 {
-        let ip = self.ip as usize;
-        let modrm_byte = self.mem[ip + 1];
+        let modrm_byte = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
         let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte).unpack();
 
         if is_addressing_mode(id_mod) {
@@ -424,35 +617,39 @@ sf: {:?}",
             let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
             //println!("ip increment: {:X}", ip_increment);
             if word_inst && !imm_byte {
-                let mut imm = read_word(&self.mem, ip + 4);
-                let mut rm = read_word(&self.mem, address as usize);
+                let mut imm =
+                    self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 4);
+                let mut rm = self.read_mem_word(CpuMemoryAccessType::Variable, address);
                 let word_op = self.get_opext_group1_inst(id_reg);
                 word_op(&mut rm, &mut imm, &mut self.flag);
-                write_word(&mut self.mem, address as usize, rm);
+                self.write_mem_word(CpuMemoryAccessType::Variable, address, rm);
                 ip_increment + 2
             } else if word_inst && imm_byte {
-                let imm_byte = self.mem[ip + 4] as i8;
+                let imm_byte =
+                    self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 4) as i8;
                 let imm = imm_byte as i16;
                 let mut imm = imm as u16;
-                let mut rm = read_word(&self.mem, address as usize);
+                let mut rm = self.read_mem_word(CpuMemoryAccessType::Variable, address);
                 let word_op = self.get_opext_group1_inst(id_reg);
                 word_op(&mut rm, &mut imm, &mut self.flag);
-                write_word(&mut self.mem, address as usize, rm);
+                self.write_mem_word(CpuMemoryAccessType::Variable, address, rm);
                 ip_increment + 1
                 // TODO check ip increment for this case..
             } else {
-                let mut imm = self.mem[ip + 4];
-                let mut rm = self.mem[address as usize];
+                let mut imm =
+                    self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 4);
+                let mut rm = self.read_mem_byte(CpuMemoryAccessType::Variable, address);
                 let byte_op = self.get_opext_group1_inst(id_reg);
                 byte_op(&mut rm, &mut imm, &mut self.flag);
-                self.mem[address as usize] = rm;
+                self.write_mem_byte(CpuMemoryAccessType::Variable, address, rm);
                 ip_increment + 1
             }
         } else {
             // R/M is a register
 
             if word_inst && !imm_byte {
-                let mut imm = read_word(&self.mem, ip + 2);
+                let mut imm =
+                    self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 2);
                 let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
                 let word_op = self.get_opext_group1_inst(id_reg);
                 word_op(&mut rm, &mut imm, &mut self.flag);
@@ -460,7 +657,8 @@ sf: {:?}",
                 4
             } else if word_inst && imm_byte {
                 // NOTE byte is sign extended!
-                let imm_byte = self.mem[ip + 2] as i8;
+                let imm_byte =
+                    self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 2) as i8;
                 let imm = imm_byte as i16; // sign extend
                 let mut imm = imm as u16;
                 let mut rm = self.get_register_value_by_modrm_reg_code(id_rm);
@@ -469,7 +667,8 @@ sf: {:?}",
                 self.set_register_value_by_modrm_reg_code(id_rm, rm);
                 3
             } else {
-                let mut imm = self.mem[ip + 2];
+                let mut imm =
+                    self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 2);
                 let mut rm = self.get_register_byte_value_by_modrm_reg_code(id_rm);
                 let byte_op = self.get_opext_group1_inst(id_reg);
                 byte_op(&mut rm, &mut imm, &mut self.flag);
@@ -523,14 +722,16 @@ sf: {:?}",
         self.do_modrm_inst(
             op,
             |cpu, reg_or_mem| match reg_or_mem {
-                RegisterOrMemory::Memory(address) => read_word(&cpu.mem, address as usize),
+                RegisterOrMemory::Memory(address) => {
+                    cpu.read_mem_word(CpuMemoryAccessType::Variable, address)
+                }
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.get_register_value_by_modrm_reg_code(reg_code)
                 }
             },
             |cpu, reg_or_mem, value| match reg_or_mem {
                 RegisterOrMemory::Memory(address) => {
-                    write_word(&mut cpu.mem, address as usize, value)
+                    cpu.write_mem_word(CpuMemoryAccessType::Variable, address, value)
                 }
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.set_register_value_by_modrm_reg_code(reg_code, value)
@@ -560,8 +761,7 @@ sf: {:?}",
         RegGetter: Fn(&Self, ModRmByte, u16) -> InstructionDataType,
         RegSetter: Fn(&mut Self, u8, InstructionDataType),
     {
-        let ip = self.ip as usize;
-        let modrm_byte = self.mem[ip + 1];
+        let modrm_byte = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
         let modrm_byte = parse_mod_rm_byte(modrm_byte);
         let (id_mod, id_reg, id_rm) = modrm_byte.unpack();
 
@@ -597,9 +797,9 @@ sf: {:?}",
     {
         let get_reg_func = |s: &Cpu, modrm_byte: ModRmByte, ip_increment| {
             if is_addressing_mode(modrm_byte.id_mod) {
-                read_word(&s.mem, (s.ip + ip_increment) as usize)
+                s.read_mem_word(CpuMemoryAccessType::InstructionFetch, s.ip + ip_increment)
             } else {
-                read_word(&s.mem, (s.ip + 2) as usize)
+                s.read_mem_word(CpuMemoryAccessType::InstructionFetch, s.ip + 2)
             }
         };
         // no setter required, only r/m is being modified
@@ -610,19 +810,35 @@ sf: {:?}",
     where
         F: Fn(&mut u8, &mut u8, &mut CpuFlags),
     {
-        let mut imm = self.mem[(self.ip + 1) as usize];
-        let mut al = self.ax.get_low();
-        op(&mut al, &mut imm, &mut self.flag);
-        self.ax.set_low(al);
-        2
+        self.do_reg_imm_byte_inst(CpuRegister::Ax, false, op)
     }
 
     fn do_ax_word_inst<F>(&mut self, op: F) -> u16
     where
         F: Fn(&mut u16, &mut u16, &mut CpuFlags),
     {
-        let mut imm = read_word(&self.mem, (self.ip + 1) as usize);
-        op(&mut self.ax, &mut imm, &mut self.flag);
+        self.do_reg_imm_word_inst(CpuRegister::Ax, op)
+    }
+
+    fn do_reg_imm_byte_inst<F>(&mut self, target_register: CpuRegister, high: bool, op: F) -> u16
+    where
+        F: Fn(&mut u8, &mut u8, &mut CpuFlags),
+    {
+        let mut imm = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
+        let mut val = self.get_register_byte_value(target_register, high);
+        op(&mut val, &mut imm, &mut self.flag);
+        self.set_register_byte_value(target_register, high, val);
+        2
+    }
+
+    fn do_reg_imm_word_inst<F>(&mut self, target_register: CpuRegister, op: F) -> u16
+    where
+        F: Fn(&mut u16, &mut u16, &mut CpuFlags),
+    {
+        let mut imm = self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
+        let mut val = self.get_register_value(target_register);
+        op(&mut val, &mut imm, &mut self.flag);
+        self.set_register_value(target_register, val);
         3
     }
 
@@ -637,16 +853,32 @@ sf: {:?}",
         0
     }
 
-    fn do_sp_inst<F>(&mut self, op: F) -> u16
-    where
-        F: Fn(&mut [u8], &mut u16),
-    {
-        op(&mut self.mem, &mut self.sp);
+    fn push(&mut self, register: CpuRegister) -> u16 {
+        // TODO: 286 handles this differently..
+        self.sp -= 2;
+        let value = self.get_register_value(register);
+        self.write_mem_word(CpuMemoryAccessType::StackOperation, self.sp, value);
+        1
+    }
+
+    fn push_val(&mut self, value: u16) -> u16 {
+        // TODO: 286 handles this differently..
+        self.sp -= 2;
+        self.write_mem_word(CpuMemoryAccessType::StackOperation, self.sp, value);
+        1
+    }
+
+    fn pop(&mut self, register: CpuRegister) -> u16 {
+        self.set_register_value(
+            register,
+            self.read_mem_word(CpuMemoryAccessType::StackOperation, self.sp),
+        );
+        self.sp += 2;
         1
     }
 
     pub fn do_cycle(&mut self) -> bool {
-        let opcode = self.mem[self.ip as usize];
+        let opcode = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip);
 
         let mut should_continue_emulation = true;
         let ip_increment = match opcode {
@@ -656,33 +888,33 @@ sf: {:?}",
             0x03 => self.do_word_inst(swap_args(operations::add)),
             0x04 => self.do_ax_byte_inst(operations::add),
             0x05 => self.do_ax_word_inst(operations::add),
-            0x06 => push_reg(&mut self.mem, &mut self.sp, self.es),
-            0x07 => pop_reg(&self.mem, &mut self.sp, &mut self.es),
+            0x06 => self.push(CpuRegister::Es),
+            0x07 => self.pop(CpuRegister::Es),
             0x08 => self.do_byte_inst(operations::bitwise_or),
             0x09 => self.do_word_inst(operations::bitwise_or),
             0x0A => self.do_byte_inst(swap_args(operations::bitwise_or)),
             0x0B => self.do_word_inst(swap_args(operations::bitwise_or)),
             0x0C => self.do_ax_byte_inst(operations::bitwise_or),
             0x0D => self.do_ax_word_inst(operations::bitwise_or),
-            0x0E => push_reg(&mut self.mem, &mut self.sp, self.cs),
+            0x0E => self.push(CpuRegister::Cs),
             // TODO: 0x0F is pop_reg for cs but only on 8086
-            0x0F => pop_reg(&self.mem, &mut self.sp, &mut self.cs),
+            0x0F => self.pop(CpuRegister::Cs),
             0x10 => self.do_byte_inst(operations::add_with_carry),
             0x11 => self.do_word_inst(operations::add_with_carry),
             0x12 => self.do_byte_inst(swap_args(operations::add_with_carry)),
             0x13 => self.do_word_inst(swap_args(operations::add_with_carry)),
             0x14 => self.do_ax_byte_inst(operations::add_with_carry),
             0x15 => self.do_ax_word_inst(operations::add_with_carry),
-            0x16 => push_reg(&mut self.mem, &mut self.sp, self.ss),
-            0x17 => pop_reg(&self.mem, &mut self.sp, &mut self.ss),
+            0x16 => self.push(CpuRegister::Ss),
+            0x17 => self.pop(CpuRegister::Ss),
             0x18 => self.do_byte_inst(operations::sub_with_borrow),
             0x19 => self.do_word_inst(operations::sub_with_borrow),
             0x1A => self.do_byte_inst(swap_args(operations::sub_with_borrow)),
             0x1B => self.do_word_inst(swap_args(operations::sub_with_borrow)),
             0x1C => self.do_ax_byte_inst(operations::sub_with_borrow),
             0x1D => self.do_ax_word_inst(operations::sub_with_borrow),
-            0x1E => push_reg(&mut self.mem, &mut self.sp, self.ds),
-            0x1F => pop_reg(&self.mem, &mut self.sp, &mut self.ds),
+            0x1E => self.push(CpuRegister::Ds),
+            0x1F => self.pop(CpuRegister::Ds),
             0x20 => self.do_byte_inst(operations::bitwise_and),
             0x21 => self.do_word_inst(operations::bitwise_and),
             0x22 => self.do_byte_inst(swap_args(operations::bitwise_and)),
@@ -727,32 +959,22 @@ sf: {:?}",
             0x4D => dec_reg(&mut self.bp, &mut self.flag),
             0x4E => dec_reg(&mut self.si, &mut self.flag),
             0x4F => dec_reg(&mut self.di, &mut self.flag),
-            0x50 => push_reg(&mut self.mem, &mut self.sp, self.ax),
-            0x51 => push_reg(&mut self.mem, &mut self.sp, self.cx),
-            0x52 => push_reg(&mut self.mem, &mut self.sp, self.dx),
-            0x53 => push_reg(&mut self.mem, &mut self.sp, self.bx),
-            0x54 => self.do_sp_inst(|mem: &mut [u8], sp: &mut u16| {
-                // handle SP as a special case to make borrow checker happy
-                // TODO: 286 handles this differently..
-                *sp -= 2;
-                write_word(mem, *sp as usize, *sp);
-            }),
-            0x55 => push_reg(&mut self.mem, &mut self.sp, self.bp),
-            0x56 => push_reg(&mut self.mem, &mut self.sp, self.si),
-            0x57 => push_reg(&mut self.mem, &mut self.sp, self.di),
-            0x58 => pop_reg(&self.mem, &mut self.sp, &mut self.ax),
-            0x59 => pop_reg(&self.mem, &mut self.sp, &mut self.cx),
-            0x5A => pop_reg(&self.mem, &mut self.sp, &mut self.dx),
-            0x5B => pop_reg(&self.mem, &mut self.sp, &mut self.bx),
-            0x5C => self.do_sp_inst(|mem: &mut [u8], sp: &mut u16| {
-                // handle SP as a special case to make borrow checker happy
-                // TODO: 286 handles this differently..
-                *sp = read_word(mem, *sp as usize);
-                *sp += 2;
-            }),
-            0x5D => pop_reg(&self.mem, &mut self.sp, &mut self.bp),
-            0x5E => pop_reg(&self.mem, &mut self.sp, &mut self.si),
-            0x5F => pop_reg(&self.mem, &mut self.sp, &mut self.di),
+            0x50 => self.push(CpuRegister::Ax),
+            0x51 => self.push(CpuRegister::Cx),
+            0x52 => self.push(CpuRegister::Dx),
+            0x53 => self.push(CpuRegister::Bx),
+            0x54 => self.push(CpuRegister::Sp),
+            0x55 => self.push(CpuRegister::Bp),
+            0x56 => self.push(CpuRegister::Si),
+            0x57 => self.push(CpuRegister::Di),
+            0x58 => self.pop(CpuRegister::Ax),
+            0x59 => self.pop(CpuRegister::Cx),
+            0x5A => self.pop(CpuRegister::Dx),
+            0x5B => self.pop(CpuRegister::Bx),
+            0x5C => self.pop(CpuRegister::Sp),
+            0x5D => self.pop(CpuRegister::Bp),
+            0x5E => self.pop(CpuRegister::Si),
+            0x5F => self.pop(CpuRegister::Di),
             0x72 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::CARRY),
             0x73 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::CARRY),
             0x74 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::ZERO),
@@ -791,49 +1013,45 @@ sf: {:?}",
             0x95 => swap_reg(&mut self.ax, &mut self.bp),
             0x96 => swap_reg(&mut self.ax, &mut self.si),
             0x97 => swap_reg(&mut self.ax, &mut self.di),
-            0xB0 => mov_reg_imm_byte(&mut self.ax, self.mem[(self.ip + 1) as usize], false),
-            0xB1 => mov_reg_imm_byte(&mut self.cx, self.mem[(self.ip + 1) as usize], false),
-            0xB2 => mov_reg_imm_byte(&mut self.dx, self.mem[(self.ip + 1) as usize], false),
-            0xB3 => mov_reg_imm_byte(&mut self.bx, self.mem[(self.ip + 1) as usize], false),
-            0xB4 => mov_reg_imm_byte(&mut self.ax, self.mem[(self.ip + 1) as usize], true),
-            0xB5 => mov_reg_imm_byte(&mut self.cx, self.mem[(self.ip + 1) as usize], true),
-            0xB6 => mov_reg_imm_byte(&mut self.dx, self.mem[(self.ip + 1) as usize], true),
-            0xB7 => mov_reg_imm_byte(&mut self.bx, self.mem[(self.ip + 1) as usize], true),
-            0xB8 => mov_reg_imm_word(&mut self.ax, read_word(&self.mem, (self.ip + 1) as usize)),
-            0xB9 => mov_reg_imm_word(&mut self.cx, read_word(&self.mem, (self.ip + 1) as usize)),
-            0xBA => mov_reg_imm_word(&mut self.dx, read_word(&self.mem, (self.ip + 1) as usize)),
-            0xBB => mov_reg_imm_word(&mut self.bx, read_word(&self.mem, (self.ip + 1) as usize)),
-            0xBC => mov_reg_imm_word(&mut self.sp, read_word(&self.mem, (self.ip + 1) as usize)),
-            0xBD => mov_reg_imm_word(&mut self.bp, read_word(&self.mem, (self.ip + 1) as usize)),
-            0xBE => mov_reg_imm_word(&mut self.si, read_word(&self.mem, (self.ip + 1) as usize)),
-            0xBF => mov_reg_imm_word(&mut self.di, read_word(&self.mem, (self.ip + 1) as usize)),
+            0xB0 => self.do_reg_imm_byte_inst(CpuRegister::Ax, false, operations::mov),
+            0xB1 => self.do_reg_imm_byte_inst(CpuRegister::Cx, false, operations::mov),
+            0xB2 => self.do_reg_imm_byte_inst(CpuRegister::Dx, false, operations::mov),
+            0xB3 => self.do_reg_imm_byte_inst(CpuRegister::Bx, false, operations::mov),
+            0xB4 => self.do_reg_imm_byte_inst(CpuRegister::Ax, true, operations::mov),
+            0xB5 => self.do_reg_imm_byte_inst(CpuRegister::Cx, true, operations::mov),
+            0xB6 => self.do_reg_imm_byte_inst(CpuRegister::Dx, true, operations::mov),
+            0xB7 => self.do_reg_imm_byte_inst(CpuRegister::Bx, true, operations::mov),
+            0xB8 => self.do_reg_imm_word_inst(CpuRegister::Ax, operations::mov),
+            0xB9 => self.do_reg_imm_word_inst(CpuRegister::Cx, operations::mov),
+            0xBA => self.do_reg_imm_word_inst(CpuRegister::Dx, operations::mov),
+            0xBB => self.do_reg_imm_word_inst(CpuRegister::Bx, operations::mov),
+            0xBC => self.do_reg_imm_word_inst(CpuRegister::Sp, operations::mov),
+            0xBD => self.do_reg_imm_word_inst(CpuRegister::Bp, operations::mov),
+            0xBE => self.do_reg_imm_word_inst(CpuRegister::Si, operations::mov),
+            0xBF => self.do_reg_imm_word_inst(CpuRegister::Di, operations::mov),
             0xC3 => {
                 // RET
-                pop_reg(&self.mem, &mut self.sp, &mut self.ip);
+                self.pop(CpuRegister::Ip);
                 0
             }
-            0xC7 => self.do_rm_imm_word_inst(|rm, imm, _flags| {
-                *rm = *imm;
-            }),
-            // 0xE0 => self.do_imm_inst(|ip, imm, _flags| {
-
-            // }),
+            0xC7 => self.do_rm_imm_word_inst(operations::mov),
             0xE8 => {
                 // CALL
                 let return_address = self.ip + 3; // next instruction after this one (3 bytes after)
-                push_reg(&mut self.mem, &mut self.sp, return_address);
+                self.push_val(return_address);
                 // add the displacement to IP
-                let disp = read_word(&self.mem, (self.ip as usize) + 1);
+                let disp = self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
                 // todo check if this is correct
                 self.ip = self.ip.wrapping_add(disp);
                 3
             }
             0xE9 => {
-                self.ip += read_word(&self.mem, (self.ip as usize) + 1);
+                self.ip += self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
                 3
             }
             0xEB => {
-                let sval = self.mem[(self.ip as usize) + 1] as i8;
+                let sval =
+                    self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1) as i8;
                 self.ip = self.ip.wrapping_add_signed(sval as i16);
                 2
             }
@@ -869,7 +1087,7 @@ mod tests {
     use crate::Cpu;
     use crate::cpu::*;
 
-    const TEST_MEM_SIZE: usize = 65535;
+    const TEST_MEM_SIZE: usize = 640000;
 
     #[test]
     fn cpu_sanity() {
@@ -888,24 +1106,26 @@ mod tests {
         assert_eq!(cpu.flag.bits(), 0);
 
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.cs = 0xFFFF;
+        let ea: usize = 0xFFFF * 0x10;
         cpu.ax = 69;
         cpu.cx = 42;
         cpu.dx = 1;
         cpu.ip = 0;
-        cpu.mem[0] = 0x01; // ADD
-        cpu.mem[1] = 0b11000010; // ADD DX, AX
-        cpu.mem[2] = 0x01; // ADD
-        cpu.mem[3] = 0b00001110; // ADD [0x102], CX
-        cpu.mem[4] = 102; // Address
-        cpu.mem[5] = 0;
+        cpu.mem[ea] = 0x01; // ADD
+        cpu.mem[ea + 1] = 0b11000010; // ADD DX, AX
+        cpu.mem[ea + 2] = 0x01; // ADD
+        cpu.mem[ea + 3] = 0b00001110; // ADD [0x102], CX
+        cpu.mem[ea + 4] = 102; // Address
+        cpu.mem[ea + 5] = 0;
 
         // Flag tests
-        cpu.mem[6] = 0x01;
-        cpu.mem[7] = 0b11000010; // ADD DX, AX
-        cpu.mem[8] = 0x01;
-        cpu.mem[9] = 0b11000010; // ADD DX, AX
-        cpu.mem[10] = 0x01;
-        cpu.mem[11] = 0b11000010; // ADD DX, AX
+        cpu.mem[ea + 6] = 0x01;
+        cpu.mem[ea + 7] = 0b11000010; // ADD DX, AX
+        cpu.mem[ea + 8] = 0x01;
+        cpu.mem[ea + 9] = 0b11000010; // ADD DX, AX
+        cpu.mem[ea + 10] = 0x01;
+        cpu.mem[ea + 11] = 0b11000010; // ADD DX, AX
         cpu.mem[102] = 42;
         cpu.do_cycle();
         assert_eq!(cpu.dx, 70);
@@ -961,20 +1181,28 @@ mod tests {
 
         // MOV [BX+SI+0x1234], AX
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.es = 0xF000;
         cpu.ax = 0xA55A;
         cpu.bx = 0x1000;
         cpu.si = 0x2000;
-        cpu.mem[0x4234] = 0;
+        let ea = 0xF000 * 0x10 + 0x1000 + 0x2000 + 0x1234;
+        cpu.mem[ea] = 0;
+        cpu.mem[0] = 0x26; // ES segment override
+        cpu.mem[1] = 0x89;
+        cpu.mem[2] = 0x80;
+        cpu.mem[3] = 0x34;
+        cpu.mem[4] = 0x12;
+        /*cpu.mem[0x4234] = 0;
         cpu.mem[0] = 0x89;
         cpu.mem[1] = 0x80;
         cpu.mem[2] = 0x34;
-        cpu.mem[3] = 0x12;
+        cpu.mem[3] = 0x12;*/
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0xA55A);
         assert_eq!(cpu.bx, 0x1000);
         assert_eq!(cpu.si, 0x2000);
-        assert_eq!(cpu.ip, 0x04);
-        assert_eq!(read_word(&cpu.mem, 0x4234), 0xA55A);
+        assert_eq!(cpu.ip, 0x05);
+        assert_eq!(read_word(&cpu.mem, ea), 0xA55A);
     }
 
     #[test]
@@ -1027,9 +1255,11 @@ mod tests {
     fn cpu_mov_sanity() {
         // MOV AX, 0x1234
         let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
-        cpu.mem[0] = 0xB8;
-        cpu.mem[1] = 0x34;
-        cpu.mem[2] = 0x12;
+        cpu.cs = 0xF000;
+        let ea: usize = 0xF000 * 0x10;
+        cpu.mem[ea] = 0xB8;
+        cpu.mem[ea + 1] = 0x34;
+        cpu.mem[ea + 2] = 0x12;
         let old_flags = cpu.flag;
         cpu.do_cycle();
         assert_eq!(cpu.ax, 0x1234);
@@ -1038,6 +1268,8 @@ mod tests {
 
         // MOV [0x1234], 0x5678
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.ds = 0xFFF0;
+        let ea: usize = 0x101134;
         cpu.mem[0] = 0xC7;
         cpu.mem[1] = 0x06;
         cpu.mem[2] = 0x34;
@@ -1046,7 +1278,7 @@ mod tests {
         cpu.mem[5] = 0x56;
         let old_flags = cpu.flag;
         cpu.do_cycle();
-        assert_eq!(read_word(&cpu.mem, 0x1234), 0x5678);
+        assert_eq!(read_word(&cpu.mem, ea), 0x5678);
         assert_eq!(cpu.flag, old_flags);
 
         // MOV BX, 0x1234
@@ -1168,13 +1400,15 @@ mod tests {
         // add    WORD PTR ds:0x1d3,0x4c
         // 83 06 d3 01 4c
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.ds = 0xF000;
         cpu.mem[0] = 0x83;
         cpu.mem[1] = 0x06;
         cpu.mem[2] = 0xD3;
         cpu.mem[3] = 0x01;
         cpu.mem[4] = 0x4C;
         cpu.do_cycle();
-        assert_eq!(cpu.mem[0x1D3], 0x4C);
+        const EA: usize = 0xF000 * 0x10 + 0x1D3;
+        assert_eq!(cpu.mem[EA], 0x4C);
         assert_eq!(cpu.ip, 5);
     }
 
@@ -1419,8 +1653,10 @@ mod tests {
     fn test_80_cmp_zero() {
         let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         // CMP BYTE [0x1234], 0x12
+        cpu.ds = 0x923F;
         cpu.mem[0..5].copy_from_slice(&[0x80, 0x3E, 0x34, 0x12, 0x12]);
-        cpu.mem[0x1234] = 0x12;
+        const EA: usize = 0x923F * 0x10 + 0x1234;
+        cpu.mem[EA] = 0x12;
         cpu.do_cycle();
 
         assert_eq!(cpu.ip, 5);
@@ -2467,6 +2703,18 @@ mod tests {
         // Most 8086 emulators ignore writes to CS via MOV
         assert_eq!(cpu.cs, original_cs, "CS should remain unchanged");
         assert_eq!(cpu.ip, 2);
+    }
+
+    #[test]
+    fn compute_effective_address_test() {
+        let ea = Cpu::compute_effective_address(0xF000, 0xFFFD);
+        assert_eq!(ea, 0xFFFFD);
+
+        let ea = Cpu::compute_effective_address(0x923F, 0xE2FF);
+        assert_eq!(ea, 0xA06EF);
+
+        let ea = Cpu::compute_effective_address(0xFFFF, 0xFFFF);
+        assert_eq!(ea, 0x10FFEF);
     }
 
     // This is one big test that runs the program from: https://codegolf.stackexchange.com/questions/11880/emulate-an-intel-8086-cpu

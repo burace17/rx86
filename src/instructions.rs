@@ -1,11 +1,6 @@
 use num_traits::Zero;
 
-use crate::{
-    bits::Bits,
-    cpu::CpuFlags,
-    memory::{read_word, write_word},
-    traits::NumericOps,
-};
+use crate::{cpu::CpuFlags, traits::NumericOps};
 
 #[derive(Clone, Copy)]
 pub struct ModRmByte {
@@ -71,35 +66,9 @@ pub fn dec_byte(reg: &mut u8, flags: &mut CpuFlags) -> u16 {
     1
 }
 
-pub fn push_reg(mem: &mut [u8], sp: &mut u16, reg: u16) -> u16 {
-    *sp -= 2;
-    write_word(mem, *sp as usize, reg);
-    1
-}
-
-pub fn pop_reg(mem: &[u8], sp: &mut u16, reg: &mut u16) -> u16 {
-    *reg = read_word(mem, *sp as usize);
-    *sp += 2;
-    1
-}
-
 pub fn swap_reg(ax: &mut u16, xx: &mut u16) -> u16 {
     std::mem::swap(ax, xx);
     1
-}
-
-pub fn mov_reg_imm_word(reg: &mut u16, imm: u16) -> u16 {
-    *reg = imm;
-    3
-}
-
-pub fn mov_reg_imm_byte(reg: &mut u16, imm: u8, high: bool) -> u16 {
-    if high {
-        (*reg).set_high(imm);
-    } else {
-        (*reg).set_low(imm);
-    }
-    2
 }
 
 fn jmp(mem: &[u8], ip: &mut u16) {
