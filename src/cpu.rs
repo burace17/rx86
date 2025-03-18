@@ -1087,7 +1087,7 @@ mod tests {
     use crate::Cpu;
     use crate::cpu::*;
 
-    const TEST_MEM_SIZE: usize = 640000;
+    const TEST_MEM_SIZE: usize = 11000000;
 
     #[test]
     fn cpu_sanity() {
