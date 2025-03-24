@@ -64,6 +64,9 @@ where
     *rm = old.wrapping_sub(&val);
     let carry = old.upcast() < ((*reg).upcast().wrapping_add(&c.upcast()));
     flags.set(CpuFlags::CARRY, carry);
+    flags.set(CpuFlags::PARITY, T::calc_parity(*rm));
+    flags.set(CpuFlags::OVERFLOW, T::calc_overflow(old, val, *rm));
+    flags.set(CpuFlags::AUX_CARRY, T::calc_af(old, val, *rm));
     flags.set(CpuFlags::ZERO, *rm == T::zero());
     flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
 }
@@ -94,10 +97,11 @@ where
     T: NumericOps,
 {
     *rm |= *reg;
-    flags.remove(CpuFlags::CARRY);
     flags.set(CpuFlags::ZERO, *rm == T::zero());
     flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-    // todo clear overflow flag
+    flags.set(CpuFlags::PARITY, T::calc_parity(*rm));
+    flags.remove(CpuFlags::CARRY);
+    flags.remove(CpuFlags::OVERFLOW);
 }
 
 pub fn bitwise_and<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
@@ -105,10 +109,11 @@ where
     T: NumericOps,
 {
     *rm &= *reg;
-    flags.remove(CpuFlags::CARRY);
     flags.set(CpuFlags::ZERO, *rm == T::zero());
     flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-    // todo clear overflow flag
+    flags.set(CpuFlags::PARITY, T::calc_parity(*rm));
+    flags.remove(CpuFlags::CARRY);
+    flags.remove(CpuFlags::OVERFLOW);
 }
 
 pub fn bitwise_xor<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
@@ -116,8 +121,9 @@ where
     T: NumericOps,
 {
     *rm ^= *reg;
-    flags.remove(CpuFlags::CARRY);
     flags.set(CpuFlags::ZERO, *rm == T::zero());
     flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
-    // todo clear overflow flag
+    flags.set(CpuFlags::PARITY, T::calc_parity(*rm));
+    flags.remove(CpuFlags::CARRY);
+    flags.remove(CpuFlags::OVERFLOW);
 }

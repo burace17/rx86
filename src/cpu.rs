@@ -10,22 +10,18 @@ use crate::traits::NumericOps;
 use bitflags::bitflags;
 use std::io;
 
-pub const CARRY_FLAG: u16 = 0;
-// static PARITY_FLAG: u16 = 2;
-// static AUX_CARRY_FLAG: u16 = 4;
-pub const ZERO_FLAG: u16 = 6;
-pub const SIGN_FLAG: u16 = 7;
-// static TRAP_FLAG: u16 = 8;
-// static INTERRUPT_FLAG: u16 = 9;
-// static DIRECTION_FLAG: u16 = 10;
-// static OVERFLOW_FLAG: u16 = 11;
-
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Default)]
     pub struct CpuFlags: u16 {
-        const CARRY = 1 << CARRY_FLAG;
-        const ZERO = 1 << ZERO_FLAG;
-        const SIGN = 1 << SIGN_FLAG;
+        const CARRY = 1 << 0;
+        const PARITY = 1 << 2;
+        const AUX_CARRY = 1 << 4;
+        const ZERO = 1 << 6;
+        const SIGN = 1 << 7;
+        const TRAP = 1 << 8;
+        const INTERRUPT = 1 << 9;
+        const DIRECTION = 1 << 10;
+        const OVERFLOW = 1 << 11;
     }
 }
 
