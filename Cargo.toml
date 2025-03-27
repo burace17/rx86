@@ -11,3 +11,10 @@ num-conv = "=0.1.0"
 [dependencies.num-traits]
 version = "0.2"
 default-features = false
+
+[dev-dependencies]
+serde_json = "1.0"
+
+[dev-dependencies.serde]
+version = "1.0"
+features = ["derive"]

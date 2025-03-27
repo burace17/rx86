@@ -1,0 +1,208 @@
+
+/home/blair/Downloads/codegolf:     file format binary
+
+
+Disassembly of section .data:
+
+00000000 <.data>:
+   0:	81 fc 00 01          	cmp    sp,0x100
+   4:	74 01                	je     0x7
+   6:	f4                   	hlt    
+   7:	bc 00 10             	mov    sp,0x1000
+   a:	b0 2e                	mov    al,0x2e
+   c:	bb 00 00             	mov    bx,0x0
+   f:	4b                   	dec    bx
+  10:	83 fb ff             	cmp    bx,0xffff
+  13:	75 f1                	jne    0x6
+  15:	e8 51 01             	call   0x169
+  18:	43                   	inc    bx
+  19:	75 eb                	jne    0x6
+  1b:	e8 4b 01             	call   0x169
+  1e:	31 c9                	xor    cx,cx
+  20:	09 cb                	or     bx,cx
+  22:	75 e2                	jne    0x6
+  24:	72 e0                	jb     0x6
+  26:	e8 40 01             	call   0x169
+  29:	b9 00 80             	mov    cx,0x8000
+  2c:	39 d9                	cmp    cx,bx
+  2e:	76 d6                	jbe    0x6
+  30:	e8 36 01             	call   0x169
+  33:	01 cb                	add    bx,cx
+  35:	72 cf                	jb     0x6
+  37:	e8 2f 01             	call   0x169
+  3a:	01 db                	add    bx,bx
+  3c:	83 d1 00             	adc    cx,0x0
+  3f:	79 c5                	jns    0x6
+  41:	72 c3                	jb     0x6
+  43:	51                   	push   cx
+  44:	83 e1 01             	and    cx,0x1
+  47:	74 bd                	je     0x6
+  49:	e8 1d 01             	call   0x169
+  4c:	59                   	pop    cx
+  4d:	f9                   	stc    
+  4e:	bb 00 80             	mov    bx,0x8000
+  51:	19 d9                	sbb    cx,bx
+  53:	75 b1                	jne    0x6
+  55:	72 af                	jb     0x6
+  57:	e8 0f 01             	call   0x169
+  5a:	e8 00 00             	call   0x5d
+  5d:	5b                   	pop    bx
+  5e:	81 fb 5d 00          	cmp    bx,0x5d
+  62:	75 a2                	jne    0x6
+  64:	81 fc 00 10          	cmp    sp,0x1000
+  68:	75 9c                	jne    0x6
+  6a:	e8 fc 00             	call   0x169
+  6d:	bb 72 00             	mov    bx,0x72
+  70:	53                   	push   bx
+  71:	c3                   	ret    
+  72:	81 fc 00 10          	cmp    sp,0x1000
+  76:	75 8e                	jne    0x6
+  78:	e8 ee 00             	call   0x169
+  7b:	90                   	nop
+  7c:	90                   	nop
+  7d:	90                   	nop
+  7e:	eb 01                	jmp    0x81
+  80:	f4                   	hlt    
+  81:	e8 f8 00             	call   0x17c
+  84:	b8 c5 01             	mov    ax,0x1c5
+  87:	e8 ca 00             	call   0x154
+  8a:	e8 ef 00             	call   0x17c
+  8d:	b0 30                	mov    al,0x30
+  8f:	e8 d7 00             	call   0x169
+  92:	fe c0                	inc    al
+  94:	3c 7f                	cmp    al,0x7f
+  96:	75 f7                	jne    0x8f
+  98:	b0 23                	mov    al,0x23
+  9a:	c7 06 d3 01 90 01    	mov    WORD PTR ds:0x1d3,0x190
+  a0:	b1 50                	mov    cl,0x50
+  a2:	e8 c4 00             	call   0x169 ; print!
+  a5:	fe c9                	dec    cl
+  a7:	75 f9                	jne    0xa2
+  a9:	81 3e d3 01 e0 01    	cmp    WORD PTR ds:0x1d3,0x1e0
+  af:	75 0a                	jne    0xbb
+  b1:	b1 50                	mov    cl,0x50
+  b3:	c7 06 d3 01 80 07    	mov    WORD PTR ds:0x1d3,0x780 ; suspicious
+  b9:	eb e7                	jmp    0xa2
+  bb:	c7 06 d3 01 e0 01    	mov    WORD PTR ds:0x1d3,0x1e0 ; suspicious
+  c1:	b1 12                	mov    cl,0x12
+  c3:	e8 a3 00             	call   0x169
+  c6:	e8 a0 00             	call   0x169
+  c9:	83 06 d3 01 4c       	add    WORD PTR ds:0x1d3,0x4c ; suspicious
+  ce:	e8 98 00             	call   0x169
+  d1:	e8 95 00             	call   0x169
+  d4:	fe c9                	dec    cl
+  d6:	75 eb                	jne    0xc3
+  d8:	c7 06 d3 01 34 02    	mov    WORD PTR ds:0x1d3,0x234
+  de:	31 c0                	xor    ax,ax
+  e0:	ba 01 00             	mov    dx,0x1
+  e3:	b9 11 00             	mov    cx,0x11
+  e6:	01 c2                	add    dx,ax
+  e8:	e8 9f 00             	call   0x18a
+  eb:	50                   	push   ax
+  ec:	b8 20 00             	mov    ax,0x20
+  ef:	e8 77 00             	call   0x169
+  f2:	58                   	pop    ax
+  f3:	92                   	xchg   dx,ax
+  f4:	49                   	dec    cx
+  f5:	75 ef                	jne    0xe6
+  f7:	c7 06 d3 01 d4 02    	mov    WORD PTR ds:0x1d3,0x2d4
+  fd:	b9 00 00             	mov    cx,0x0
+ 100:	89 c8                	mov    ax,cx
+ 102:	e8 3f 00             	call   0x144
+ 105:	e8 82 00             	call   0x18a
+ 108:	b8 20 00             	mov    ax,0x20
+ 10b:	e8 5b 00             	call   0x169
+ 10e:	41                   	inc    cx
+ 10f:	83 f9 14             	cmp    cx,0x14
+ 112:	76 ec                	jbe    0x100
+ 114:	c7 06 d3 01 74 03    	mov    WORD PTR ds:0x1d3,0x374
+ 11a:	bb 02 00             	mov    bx,0x2
+ 11d:	80 8f d5 01 00       	or     BYTE PTR [bx+0x1d5],0x0
+ 122:	75 19                	jne    0x13d
+ 124:	89 d8                	mov    ax,bx
+ 126:	e8 61 00             	call   0x18a
+ 129:	b8 20 00             	mov    ax,0x20
+ 12c:	e8 3a 00             	call   0x169
+ 12f:	89 df                	mov    di,bx
+ 131:	80 8d d5 01 01       	or     BYTE PTR [di+0x1d5],0x1
+ 136:	01 df                	add    di,bx
+ 138:	83 ff 65             	cmp    di,0x65
+ 13b:	76 f4                	jbe    0x131
+ 13d:	43                   	inc    bx
+ 13e:	83 fb 64             	cmp    bx,0x64
+ 141:	76 da                	jbe    0x11d
+ 143:	f4                   	hlt    
+ 144:	89 c3                	mov    bx,ax
+ 146:	31 d2                	xor    dx,dx
+ 148:	09 db                	or     bx,bx
+ 14a:	74 05                	je     0x151
+ 14c:	01 c2                	add    dx,ax
+ 14e:	4b                   	dec    bx
+ 14f:	eb f9                	jmp    0x14a
+ 151:	89 d0                	mov    ax,dx
+ 153:	c3                   	ret    
+ 154:	53                   	push   bx
+ 155:	52                   	push   dx
+ 156:	89 c3                	mov    bx,ax
+ 158:	8a 17                	mov    dl,BYTE PTR [bx]
+ 15a:	43                   	inc    bx
+ 15b:	86 c2                	xchg   dl,al
+ 15d:	e8 09 00             	call   0x169
+ 160:	86 c2                	xchg   dl,al
+ 162:	20 d2                	and    dl,dl
+ 164:	75 f2                	jne    0x158
+ 166:	5a                   	pop    dx
+ 167:	5b                   	pop    bx
+ 168:	c3                   	ret    
+ 169:	53                   	push   bx
+ 16a:	57                   	push   di
+ 16b:	bb 00 80             	mov    bx,0x8000
+ 16e:	8b 3e d3 01          	mov    di,WORD PTR ds:0x1d3
+ 172:	88 01                	mov    BYTE PTR [bx+di],al
+ 174:	47                   	inc    di
+ 175:	89 3e d3 01          	mov    WORD PTR ds:0x1d3,di
+ 179:	5f                   	pop    di
+ 17a:	5b                   	pop    bx
+ 17b:	c3                   	ret    
+ 17c:	8b 3e d3 01          	mov    di,WORD PTR ds:0x1d3
+ 180:	83 ef 50             	sub    di,0x50
+ 183:	79 fb                	jns    0x180
+ 185:	29 3e d3 01          	sub    WORD PTR ds:0x1d3,di
+ 189:	c3                   	ret    
+ 18a:	53                   	push   bx
+ 18b:	50                   	push   ax
+ 18c:	b3 30                	mov    bl,0x30
+ 18e:	83 f8 09             	cmp    ax,0x9
+ 191:	76 2a                	jbe    0x1bd
+ 193:	83 f8 63             	cmp    ax,0x63
+ 196:	76 13                	jbe    0x1ab
+ 198:	83 e8 64             	sub    ax,0x64
+ 19b:	fe c3                	inc    bl
+ 19d:	83 f8 63             	cmp    ax,0x63
+ 1a0:	77 f6                	ja     0x198
+ 1a2:	86 d8                	xchg   al,bl
+ 1a4:	e8 c2 ff             	call   0x169
+ 1a7:	86 d8                	xchg   al,bl
+ 1a9:	b3 30                	mov    bl,0x30
+ 1ab:	83 f8 09             	cmp    ax,0x9
+ 1ae:	76 06                	jbe    0x1b6
+ 1b0:	83 e8 0a             	sub    ax,0xa
+ 1b3:	43                   	inc    bx
+ 1b4:	eb f5                	jmp    0x1ab
+ 1b6:	86 c3                	xchg   bl,al
+ 1b8:	e8 ae ff             	call   0x169
+ 1bb:	88 d8                	mov    al,bl
+ 1bd:	04 30                	add    al,0x30
+ 1bf:	e8 a7 ff             	call   0x169
+ 1c2:	58                   	pop    ax
+ 1c3:	5b                   	pop    bx
+ 1c4:	c3                   	ret    
+ 1c5:	48                   	dec    ax
+ 1c6:	65 6c                	gs ins BYTE PTR es:[di],dx
+ 1c8:	6c                   	ins    BYTE PTR es:[di],dx
+ 1c9:	6f                   	outs   dx,WORD PTR ds:[si]
+ 1ca:	2c 20                	sub    al,0x20
+ 1cc:	77 6f                	ja     0x23d
+ 1ce:	72 6c                	jb     0x23c
+ 1d0:	64 21 00             	and    WORD PTR fs:[bx+si],ax
+	...

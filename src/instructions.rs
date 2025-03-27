@@ -34,7 +34,7 @@ pub fn parse_mod_rm_byte(modrm: u8) -> ModRmByte {
 
 pub enum RegisterOrMemory {
     Register(u8),
-    Memory(u16),
+    Memory(usize),
 }
 
 pub fn is_addressing_mode(id_mod: u8) -> bool {
@@ -105,6 +105,16 @@ pub fn jmp_if_any_set(mem: &[u8], ip: &mut u16, flags: CpuFlags, mask: CpuFlags)
 
 pub fn jmp_if_none_set(mem: &[u8], ip: &mut u16, flags: CpuFlags, mask: CpuFlags) -> u16 {
     if (flags & mask).is_empty() {
+        jmp(mem, ip);
+    }
+    2
+}
+
+pub fn jmp_if<F>(mem: &[u8], ip: &mut u16, f: F) -> u16
+where
+    F: Fn() -> bool,
+{
+    if f() {
         jmp(mem, ip);
     }
     2

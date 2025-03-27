@@ -1,6 +1,6 @@
 use crate::bits::Bits;
 use crate::instructions::{
-    ModRmByte, RegisterOrMemory, dec_byte, dec_reg, inc_byte, inc_reg, is_addressing_mode,
+    ModRmByte, RegisterOrMemory, dec_byte, dec_reg, inc_byte, inc_reg, is_addressing_mode, jmp_if,
     jmp_if_any_set, jmp_if_none_set, parse_mod_rm_byte, swap_reg,
 };
 use crate::memory::{read_word, write_word};
@@ -28,24 +28,24 @@ bitflags! {
 #[derive(Default)]
 pub struct Cpu {
     // Registers
-    ax: u16,
-    bx: u16,
-    cx: u16,
-    dx: u16,
-    si: u16,
-    di: u16,
-    bp: u16,
-    sp: u16,
-    ip: u16,
+    pub ax: u16,
+    pub bx: u16,
+    pub cx: u16,
+    pub dx: u16,
+    pub si: u16,
+    pub di: u16,
+    pub bp: u16,
+    pub sp: u16,
+    pub ip: u16,
 
     seg_override: Option<SegmentOverride>,
-    cs: u16,
-    ds: u16,
-    ss: u16,
-    es: u16,
+    pub cs: u16,
+    pub ds: u16,
+    pub ss: u16,
+    pub es: u16,
 
-    flag: CpuFlags,
-    mem: Box<[u8]>,
+    pub flag: CpuFlags,
+    pub mem: Box<[u8]>,
 
     pub breakpoints: Vec<u16>,
 }
@@ -177,13 +177,13 @@ sf: {:?}",
         }
     }
 
-    fn debug_extract_segment_and_offset(input: &str) -> Option<(u16, u16)> {
+    fn debug_extract_segment_and_offset(input: &str) -> Option<(usize, usize)> {
         // FIXME: can handle errors better here
         let parts: Vec<&str> = input.split(":").collect();
         if parts.len() == 2 {
             // FIXME: should also support just specifying the name of a segment register rather than only an offset
-            let segment = u16::from_str_radix(parts[0], 16).unwrap();
-            let offset = u16::from_str_radix(parts[1], 16).unwrap();
+            let segment = usize::from_str_radix(parts[0], 16).unwrap();
+            let offset = usize::from_str_radix(parts[1], 16).unwrap();
             Some((segment, offset))
         } else {
             None
@@ -194,9 +194,8 @@ sf: {:?}",
         // FIXME: can handle errors better here
         let parts: Vec<&str> = input.split_whitespace().collect();
         if parts.len() == 2 {
-            //let addr = u16::from_str_radix(parts[1], 16).unwrap();
             if let Some((segment, offset)) = Self::debug_extract_segment_and_offset(parts[1]) {
-                let ea = Self::compute_effective_address(segment, offset);
+                let ea = (segment + offset) & 0xFFFFF; //self.compute_effective_address(segment, offset);
                 if read_word {
                     println!("0x{:X}", crate::cpu::read_word(&self.mem, ea));
                 } else {
@@ -271,24 +270,41 @@ sf: {:?}",
         match self.seg_override {
             Some(seg_override) => match seg_override {
                 SegmentOverride::Code => {
-                    matches!(access_type, CpuMemoryAccessType::InstructionFetch)
+                    matches!(
+                        access_type,
+                        CpuMemoryAccessType::InstructionFetch
+                            | CpuMemoryAccessType::Variable
+                            | CpuMemoryAccessType::BpBaseRegister
+                    )
                 }
                 SegmentOverride::Data => {
                     matches!(
                         access_type,
-                        CpuMemoryAccessType::Variable | CpuMemoryAccessType::StringSource
+                        CpuMemoryAccessType::Variable
+                            | CpuMemoryAccessType::StringSource
+                            | CpuMemoryAccessType::BpBaseRegister
                     )
                 }
-                SegmentOverride::Extra => matches!(access_type, CpuMemoryAccessType::Variable),
+                SegmentOverride::Extra => matches!(
+                    access_type,
+                    CpuMemoryAccessType::Variable
+                        | CpuMemoryAccessType::StringSource
+                        | CpuMemoryAccessType::BpBaseRegister
+                ),
                 SegmentOverride::Stack => {
-                    matches!(access_type, CpuMemoryAccessType::StackOperation)
+                    matches!(
+                        access_type,
+                        CpuMemoryAccessType::StackOperation
+                            | CpuMemoryAccessType::BpBaseRegister
+                            | CpuMemoryAccessType::Variable
+                    )
                 }
             },
             None => false,
         }
     }
 
-    fn get_active_segment_base(&self, access_type: CpuMemoryAccessType) -> u16 {
+    fn get_active_segment_base(&self, access_type: CpuMemoryAccessType) -> usize {
         (match self.seg_override {
             Some(seg_override) if self.uses_current_segment_override(access_type) => {
                 match seg_override {
@@ -306,32 +322,30 @@ sf: {:?}",
                 CpuMemoryAccessType::StringDestination => self.es,
                 CpuMemoryAccessType::BpBaseRegister => self.ss,
             },
-        }) as _
+        }) as usize
+            * 0x10
     }
 
-    fn compute_effective_address(segment: u16, offset: u16) -> usize {
-        let segment = segment as usize;
+    fn compute_effective_address(&self, access_type: CpuMemoryAccessType, offset: u16) -> usize {
         let offset = offset as usize;
-        segment * 0x10 + offset
+        let target_segment = self.get_active_segment_base(access_type);
+        (target_segment + offset) & 0xFFFFF // limited to 20 bits on 8086 only?
     }
 
     fn read_mem_byte(&self, access_type: CpuMemoryAccessType, segment_offset: u16) -> u8 {
-        let target_segment = self.get_active_segment_base(access_type);
-        let effective_address = Self::compute_effective_address(target_segment, segment_offset);
+        let effective_address = self.compute_effective_address(access_type, segment_offset);
         self.mem[effective_address]
     }
 
     fn read_mem_word(&self, access_type: CpuMemoryAccessType, segment_offset: u16) -> u16 {
-        let target_segment = self.get_active_segment_base(access_type);
-        let effective_address = Self::compute_effective_address(target_segment, segment_offset);
+        let effective_address = self.compute_effective_address(access_type, segment_offset);
         read_word(&self.mem, effective_address)
     }
 
-    fn write_mem_byte(&mut self, access_type: CpuMemoryAccessType, segment_offset: u16, value: u8) {
-        let target_segment = self.get_active_segment_base(access_type);
-        let effective_address = Self::compute_effective_address(target_segment, segment_offset);
+    /*     fn write_mem_byte(&mut self, access_type: CpuMemoryAccessType, segment_offset: u16, value: u8) {
+        let effective_address = self.compute_effective_address(access_type, segment_offset);
         self.mem[effective_address] = value;
-    }
+    } */
 
     fn write_mem_word(
         &mut self,
@@ -339,8 +353,7 @@ sf: {:?}",
         segment_offset: u16,
         value: u16,
     ) {
-        let target_segment = self.get_active_segment_base(access_type);
-        let effective_address = Self::compute_effective_address(target_segment, segment_offset);
+        let effective_address = self.compute_effective_address(access_type, segment_offset);
         write_word(&mut self.mem, effective_address, value);
     }
 
@@ -487,42 +500,72 @@ sf: {:?}",
     }
 
     // From a the mod and rm parts of the modrm byte, return the memory address and instruction length so far
-    fn read_address_from_modrm(&self, id_mod: u8, id_rm: u8) -> (u16, u16) {
+    fn read_address_from_modrm(&self, id_mod: u8, id_rm: u8) -> (usize, u16) {
         // Operand is a memory address.
-        let mut instruction_length = 2;
-        let mut address = match id_rm {
-            0x00 => self.bx.wrapping_add(self.si),
-            0x01 => self.bx.wrapping_add(self.di),
-            0x02 => self.bp.wrapping_add(self.si),
-            0x03 => self.bp.wrapping_add(self.di),
-            0x04 => self.si,
-            0x05 => self.di,
-            0x06 if id_mod == 0 => {
-                self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 2)
+        let instruction_length = match id_mod {
+            0x00 if id_rm == 0x06 => 4, // bp uses 16 bit displacement
+            0x01 => 3,
+            0x02 => 4,
+            _ => 2,
+        };
+
+        let displacement = match id_mod {
+            0x01 => {
+                (self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 2) as i8)
+                    as i16
             }
-            0x06 => self.bp,
-            0x07 => self.bx,
+            0x02 => self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 2) as i16,
+            _ => 0,
+        };
+
+        let address: usize = match id_rm {
+            0x00 => self.compute_effective_address(
+                CpuMemoryAccessType::Variable,
+                self.bx
+                    .wrapping_add(self.si)
+                    .wrapping_add_signed(displacement),
+            ),
+            0x01 => self.compute_effective_address(
+                CpuMemoryAccessType::Variable,
+                self.bx
+                    .wrapping_add(self.di)
+                    .wrapping_add_signed(displacement),
+            ),
+            0x02 => self.compute_effective_address(
+                CpuMemoryAccessType::BpBaseRegister,
+                self.bp
+                    .wrapping_add(self.si)
+                    .wrapping_add_signed(displacement),
+            ),
+            0x03 => self.compute_effective_address(
+                CpuMemoryAccessType::BpBaseRegister,
+                self.bp
+                    .wrapping_add(self.di)
+                    .wrapping_add_signed(displacement),
+            ),
+            0x04 => self.compute_effective_address(
+                CpuMemoryAccessType::Variable,
+                self.si.wrapping_add_signed(displacement),
+            ),
+            0x05 => self.compute_effective_address(
+                CpuMemoryAccessType::Variable,
+                self.di.wrapping_add_signed(displacement),
+            ),
+            0x06 if id_mod == 0 => self.compute_effective_address(
+                CpuMemoryAccessType::Variable,
+                self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 2),
+            ),
+            0x06 => self.compute_effective_address(
+                CpuMemoryAccessType::BpBaseRegister,
+                self.bp.wrapping_add_signed(displacement),
+            ),
+            0x07 => self.compute_effective_address(
+                CpuMemoryAccessType::Variable,
+                self.bx.wrapping_add_signed(displacement),
+            ),
             _ => self.cpu_panic("read_address_from_modrm: failed to parse R/M bits of mod R/M"),
         };
 
-        // bp uses 16 bit displacement
-        if id_rm == 0x06 && id_mod == 0 {
-            instruction_length = 4;
-        }
-
-        if id_mod == 0x01 {
-            let dc = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 2) as i16;
-            let mut signed_address = address as i16;
-            signed_address += dc;
-            address = signed_address as u16;
-            instruction_length = 4;
-        } else if id_mod == 0x02 {
-            let dw = self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 2) as i16;
-            let mut signed_address = address as i16;
-            signed_address += dw;
-            address = signed_address as u16;
-            instruction_length = 4;
-        }
         (address, instruction_length)
     }
 
@@ -563,7 +606,7 @@ sf: {:?}",
             op,
             |cpu, reg_or_mem| match reg_or_mem {
                 RegisterOrMemory::Memory(address) => {
-                    cpu.read_mem_byte(CpuMemoryAccessType::Variable, address)
+                    cpu.mem[address]
                 }
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.get_register_byte_value_by_modrm_reg_code(reg_code)
@@ -571,7 +614,7 @@ sf: {:?}",
             },
             |cpu, reg_or_mem, value| match reg_or_mem {
                 RegisterOrMemory::Memory(address) => {
-                    cpu.write_mem_byte(CpuMemoryAccessType::Variable, address, value)
+                    cpu.mem[address] = value
                 }
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.set_register_byte_value_by_modrm_reg_code(reg_code, value)
@@ -615,29 +658,29 @@ sf: {:?}",
             if word_inst && !imm_byte {
                 let mut imm =
                     self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 4);
-                let mut rm = self.read_mem_word(CpuMemoryAccessType::Variable, address);
+                let mut rm = read_word(&self.mem, address);
                 let word_op = self.get_opext_group1_inst(id_reg);
                 word_op(&mut rm, &mut imm, &mut self.flag);
-                self.write_mem_word(CpuMemoryAccessType::Variable, address, rm);
+                write_word(&mut self.mem, address, rm);
                 ip_increment + 2
             } else if word_inst && imm_byte {
                 let imm_byte =
                     self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 4) as i8;
                 let imm = imm_byte as i16;
                 let mut imm = imm as u16;
-                let mut rm = self.read_mem_word(CpuMemoryAccessType::Variable, address);
+                let mut rm = read_word(&self.mem, address);
                 let word_op = self.get_opext_group1_inst(id_reg);
                 word_op(&mut rm, &mut imm, &mut self.flag);
-                self.write_mem_word(CpuMemoryAccessType::Variable, address, rm);
+                write_word(&mut self.mem, address, rm);
                 ip_increment + 1
                 // TODO check ip increment for this case..
             } else {
                 let mut imm =
                     self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 4);
-                let mut rm = self.read_mem_byte(CpuMemoryAccessType::Variable, address);
+                let mut rm = self.mem[address];
                 let byte_op = self.get_opext_group1_inst(id_reg);
                 byte_op(&mut rm, &mut imm, &mut self.flag);
-                self.write_mem_byte(CpuMemoryAccessType::Variable, address, rm);
+                self.mem[address] = rm;
                 ip_increment + 1
             }
         } else {
@@ -719,7 +762,7 @@ sf: {:?}",
             op,
             |cpu, reg_or_mem| match reg_or_mem {
                 RegisterOrMemory::Memory(address) => {
-                    cpu.read_mem_word(CpuMemoryAccessType::Variable, address)
+                    read_word(&cpu.mem, address)
                 }
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.get_register_value_by_modrm_reg_code(reg_code)
@@ -727,7 +770,7 @@ sf: {:?}",
             },
             |cpu, reg_or_mem, value| match reg_or_mem {
                 RegisterOrMemory::Memory(address) => {
-                    cpu.write_mem_word(CpuMemoryAccessType::Variable, address, value)
+                    write_word(&mut cpu.mem, address, value)
                 }
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.set_register_value_by_modrm_reg_code(reg_code, value)
@@ -763,7 +806,6 @@ sf: {:?}",
 
         if is_addressing_mode(id_mod) {
             let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
-
             let mut rm_value = rm_getter(self, RegisterOrMemory::Memory(address));
             let mut reg = reg_getter(self, modrm_byte, ip_increment);
 
@@ -875,7 +917,6 @@ sf: {:?}",
 
     pub fn do_cycle(&mut self) -> bool {
         let opcode = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip);
-
         let mut should_continue_emulation = true;
         let ip_increment = match opcode {
             0x00 => self.do_byte_inst(operations::add),
@@ -971,6 +1012,8 @@ sf: {:?}",
             0x5D => self.pop(CpuRegister::Bp),
             0x5E => self.pop(CpuRegister::Si),
             0x5F => self.pop(CpuRegister::Di),
+            0x70 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::OVERFLOW),
+            0x71 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::OVERFLOW),
             0x72 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::CARRY),
             0x73 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::CARRY),
             0x74 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::ZERO),
@@ -989,6 +1032,24 @@ sf: {:?}",
             ),
             0x78 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::SIGN),
             0x79 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::SIGN),
+            0x7A => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::PARITY),
+            0x7B => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::PARITY),
+            0x7C => jmp_if(&self.mem, &mut self.ip, || {
+                self.flag.contains(CpuFlags::SIGN) != self.flag.contains(CpuFlags::OVERFLOW)
+            }),
+            0x7D => jmp_if(&self.mem, &mut self.ip, || {
+                self.flag.contains(CpuFlags::SIGN) == self.flag.contains(CpuFlags::OVERFLOW)
+            }),
+            0x7E => jmp_if(&self.mem, &mut self.ip, || {
+                self.flag.contains(CpuFlags::ZERO)
+                    || (self.flag.contains(CpuFlags::SIGN)
+                        != self.flag.contains(CpuFlags::OVERFLOW))
+            }),
+            0x7F => jmp_if(&self.mem, &mut self.ip, || {
+                !self.flag.contains(CpuFlags::ZERO)
+                    && (self.flag.contains(CpuFlags::SIGN)
+                        == self.flag.contains(CpuFlags::OVERFLOW))
+            }),
             0x80 => self.do_opext_inst(false, false),
             0x81 => self.do_opext_inst(true, false),
             0x82 => self.do_opext_inst(false, false),
@@ -1080,7 +1141,6 @@ sf: {:?}",
 
 #[cfg(test)]
 mod tests {
-    use crate::Cpu;
     use crate::cpu::*;
 
     const TEST_MEM_SIZE: usize = 11000000;
@@ -1265,7 +1325,7 @@ mod tests {
         // MOV [0x1234], 0x5678
         cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.ds = 0xFFF0;
-        let ea: usize = 0x101134;
+        let ea = 0x1134;
         cpu.mem[0] = 0xC7;
         cpu.mem[1] = 0x06;
         cpu.mem[2] = 0x34;
@@ -2633,6 +2693,106 @@ mod tests {
     }
 
     // ----------------------------
+    // 0x70: JO (Jump if OF=1)
+    // ----------------------------
+    #[test]
+    fn test_70_jo_overflow() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x70, 0x02]); // JO +2
+        cpu.flag.set(CpuFlags::OVERFLOW, true);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04); // 0x00 + 2 + 0x02
+    }
+
+    // ----------------------------
+    // 0x71: JNO (Jump if OF=0)
+    // ----------------------------
+    #[test]
+    fn test_71_jno_no_overflow() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x71, 0x02]); // JNO +2
+        cpu.flag.set(CpuFlags::OVERFLOW, false);
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x7A: JP/JPE (Jump if PF=1)
+    // ----------------------------
+    #[test]
+    fn test_7a_jp_parity_even() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x7A, 0x02]); // JP +2
+        cpu.flag.set(CpuFlags::PARITY, true); // Even parity (e.g., 0x03 = 0b00000011)
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x7B: JNP/JPO (Jump if PF=0)
+    // ----------------------------
+    #[test]
+    fn test_7b_jnp_parity_odd() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x7B, 0x02]); // JNP +2
+        cpu.flag.set(CpuFlags::PARITY, false); // Odd parity (e.g., 0x01 = 0b00000001)
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x7C: JL/JNGE (SF ≠ OF)
+    // ----------------------------
+    #[test]
+    fn test_7c_jl_signed_less() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x7C, 0x02]); // JL +2
+        cpu.flag.set(CpuFlags::SIGN, true); // Negative result
+        cpu.flag.set(CpuFlags::OVERFLOW, false); // No overflow
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x7D: JNL/JGE (SF = OF)
+    // ----------------------------
+    #[test]
+    fn test_7d_jnl_signed_not_less() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x7D, 0x02]); // JNL +2
+        cpu.flag.set(CpuFlags::SIGN, false); // Positive result
+        cpu.flag.set(CpuFlags::OVERFLOW, false); // No overflow
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x7E: JLE/JNG (ZF=1 OR SF≠OF)
+    // ----------------------------
+    #[test]
+    fn test_7e_jle_zero_case() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x7E, 0x02]); // JLE +2
+        cpu.flag.set(CpuFlags::ZERO, true); // Equality case
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
+    // 0x7F: JNLE/JG (ZF=0 AND SF=OF)
+    // ----------------------------
+    #[test]
+    fn test_7f_jg_signed_greater() {
+        let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
+        cpu.mem[0..2].copy_from_slice(&[0x7F, 0x02]); // JG +2
+        cpu.flag.set(CpuFlags::ZERO, false); // Non-zero result
+        cpu.flag.set(CpuFlags::SIGN, false); // Positive result
+        cpu.flag.set(CpuFlags::OVERFLOW, false); // No overflow
+        cpu.do_cycle();
+        assert_eq!(cpu.ip, 0x04);
+    }
+
+    // ----------------------------
     // 0x8C: MOV r/m16, Sreg
     // ----------------------------
     #[test]
@@ -2701,24 +2861,12 @@ mod tests {
         assert_eq!(cpu.ip, 2);
     }
 
-    #[test]
-    fn compute_effective_address_test() {
-        let ea = Cpu::compute_effective_address(0xF000, 0xFFFD);
-        assert_eq!(ea, 0xFFFFD);
-
-        let ea = Cpu::compute_effective_address(0x923F, 0xE2FF);
-        assert_eq!(ea, 0xA06EF);
-
-        let ea = Cpu::compute_effective_address(0xFFFF, 0xFFFF);
-        assert_eq!(ea, 0x10FFEF);
-    }
-
     // This is one big test that runs the program from: https://codegolf.stackexchange.com/questions/11880/emulate-an-intel-8086-cpu
     // and verifies it matches the reference output
     #[test]
     fn test_codegolf_reference_output() {
-        let reference_output = include_bytes!("../test/test_codegolf_reference_output.bin");
-        let reference_program = include_bytes!("../test/codegolf_reference_program");
+        let reference_output = include_bytes!("../tests/codegolf_reference_program/test_codegolf_reference_output.bin");
+        let reference_program = include_bytes!("../tests/codegolf_reference_program/codegolf_reference_program");
         let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0..reference_program.len()].copy_from_slice(reference_program);
         cpu.sp = 0x100;
