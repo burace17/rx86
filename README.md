@@ -1,0 +1,2 @@
+This is a very work-in-progress emulator for the 8086. Most instructions are emulated (probably incorrectly), but work is in progress
+to eventually come up with an emulator which can at least boot into DOS.
