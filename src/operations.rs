@@ -102,6 +102,7 @@ where
     flags.set(CpuFlags::PARITY, T::calc_parity(*rm));
     flags.remove(CpuFlags::CARRY);
     flags.remove(CpuFlags::OVERFLOW);
+    flags.remove(CpuFlags::AUX_CARRY);
 }
 
 pub fn bitwise_and<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)

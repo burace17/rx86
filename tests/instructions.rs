@@ -1,6 +1,8 @@
 use rx86::cpu::Cpu;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use test_log::test;
+use tracing::debug_span;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct CpuRegisters {
@@ -126,6 +128,7 @@ fn run_instruction_test_case(path: &str) {
     let test_json = std::fs::read_to_string(path).unwrap();
     let test_cases: Vec<InstructionTestCase> = serde_json::from_str(&test_json).unwrap();
     for test_case in test_cases.iter() {
+        let _span_ = debug_span!("", test_index = test_case.idx).entered();
         let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         set_cpu_state_from_test_case(&mut cpu, &test_case);
         cpu.do_cycle();
@@ -151,4 +154,19 @@ fn test_02() {
 #[test]
 fn test_03() {
     run_instruction_test_case("tests/instructions_cases/03.json");
+}
+
+#[test]
+fn test_05() {
+    run_instruction_test_case("tests/instructions_cases/05.json");
+}
+
+#[test]
+fn test_06() {
+    run_instruction_test_case("tests/instructions_cases/06.json");
+}
+
+#[test]
+fn test_08() {
+    run_instruction_test_case("tests/instructions_cases/08.json");
 }

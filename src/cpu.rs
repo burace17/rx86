@@ -8,7 +8,9 @@ use crate::operations;
 use crate::operations::swap_args;
 use crate::traits::NumericOps;
 use bitflags::bitflags;
+use std::fmt::UpperHex;
 use std::io;
+use tracing::{debug, debug_span};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -25,7 +27,7 @@ bitflags! {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Cpu {
     // Registers
     pub ax: u16,
@@ -50,7 +52,7 @@ pub struct Cpu {
     pub breakpoints: Vec<u16>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum SegmentOverride {
     Code,
     Data,
@@ -565,6 +567,7 @@ sf: {:?}",
             ),
             _ => self.cpu_panic("read_address_from_modrm: failed to parse R/M bits of mod R/M"),
         };
+        debug!(address, instruction_length, displacement);
 
         (address, instruction_length)
     }
@@ -605,17 +608,13 @@ sf: {:?}",
         self.do_modrm_inst(
             op,
             |cpu, reg_or_mem| match reg_or_mem {
-                RegisterOrMemory::Memory(address) => {
-                    cpu.mem[address]
-                }
+                RegisterOrMemory::Memory(address) => cpu.mem[address],
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.get_register_byte_value_by_modrm_reg_code(reg_code)
                 }
             },
             |cpu, reg_or_mem, value| match reg_or_mem {
-                RegisterOrMemory::Memory(address) => {
-                    cpu.mem[address] = value
-                }
+                RegisterOrMemory::Memory(address) => cpu.mem[address] = value,
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.set_register_byte_value_by_modrm_reg_code(reg_code, value)
                 }
@@ -761,17 +760,13 @@ sf: {:?}",
         self.do_modrm_inst(
             op,
             |cpu, reg_or_mem| match reg_or_mem {
-                RegisterOrMemory::Memory(address) => {
-                    read_word(&cpu.mem, address)
-                }
+                RegisterOrMemory::Memory(address) => read_word(&cpu.mem, address),
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.get_register_value_by_modrm_reg_code(reg_code)
                 }
             },
             |cpu, reg_or_mem, value| match reg_or_mem {
-                RegisterOrMemory::Memory(address) => {
-                    write_word(&mut cpu.mem, address, value)
-                }
+                RegisterOrMemory::Memory(address) => write_word(&mut cpu.mem, address, value),
                 RegisterOrMemory::Register(reg_code) => {
                     cpu.set_register_value_by_modrm_reg_code(reg_code, value)
                 }
@@ -799,10 +794,12 @@ sf: {:?}",
         RmSetter: Fn(&mut Self, RegisterOrMemory, InstructionDataType),
         RegGetter: Fn(&Self, ModRmByte, u16) -> InstructionDataType,
         RegSetter: Fn(&mut Self, u8, InstructionDataType),
+        InstructionDataType: UpperHex + PartialEq + Copy
     {
         let modrm_byte = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
         let modrm_byte = parse_mod_rm_byte(modrm_byte);
         let (id_mod, id_reg, id_rm) = modrm_byte.unpack();
+        debug!("mod: 0x{:X}, reg: 0x{:X}, rm: 0x{:X}", id_mod, id_reg, id_rm);
 
         if is_addressing_mode(id_mod) {
             let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
@@ -820,10 +817,17 @@ sf: {:?}",
             let mut reg = reg_getter(self, modrm_byte, 0);
             let mut rm = rm_getter(self, RegisterOrMemory::Register(id_rm));
 
+            let old_reg = reg;
+            let old_rm = rm;
+
             op(&mut rm, &mut reg, &mut self.flag);
 
-            reg_setter(self, id_reg, reg);
-            rm_setter(self, RegisterOrMemory::Register(id_rm), rm);
+            if id_rm != id_reg || old_reg != reg {
+                reg_setter(self, id_reg, reg);
+            }
+            if id_rm != id_reg || old_rm != rm {
+                rm_setter(self, RegisterOrMemory::Register(id_rm), rm);
+            }
 
             ip_increment_if_register
         }
@@ -917,6 +921,8 @@ sf: {:?}",
 
     pub fn do_cycle(&mut self) -> bool {
         let opcode = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip);
+        let _span_ = debug_span!("do_cycle", "0x{:X}", opcode).entered();
+
         let mut should_continue_emulation = true;
         let ip_increment = match opcode {
             0x00 => self.do_byte_inst(operations::add),
@@ -1142,6 +1148,7 @@ sf: {:?}",
 #[cfg(test)]
 mod tests {
     use crate::cpu::*;
+    use test_log::test;
 
     const TEST_MEM_SIZE: usize = 11000000;
 
@@ -2865,8 +2872,11 @@ mod tests {
     // and verifies it matches the reference output
     #[test]
     fn test_codegolf_reference_output() {
-        let reference_output = include_bytes!("../tests/codegolf_reference_program/test_codegolf_reference_output.bin");
-        let reference_program = include_bytes!("../tests/codegolf_reference_program/codegolf_reference_program");
+        let reference_output = include_bytes!(
+            "../tests/codegolf_reference_program/test_codegolf_reference_output.bin"
+        );
+        let reference_program =
+            include_bytes!("../tests/codegolf_reference_program/codegolf_reference_program");
         let mut cpu = Cpu::new_with_mem_size(TEST_MEM_SIZE);
         cpu.mem[0..reference_program.len()].copy_from_slice(reference_program);
         cpu.sp = 0x100;
