@@ -162,25 +162,25 @@ fn test_09() {
 
 #[test]
 fn test_0a() {
-    run_instruction_test_case("tests/instructions_cases/0a.json");
+    run_instruction_test_case("tests/instructions_cases/0A.json");
 }
 
 #[test]
 fn test_0b() {
-    run_instruction_test_case("tests/instructions_cases/0b.json");
+    run_instruction_test_case("tests/instructions_cases/0B.json");
 }
 
 #[test]
 fn test_0c() {
-    run_instruction_test_case("tests/instructions_cases/0c.json");
+    run_instruction_test_case("tests/instructions_cases/0C.json");
 }
 
 #[test]
 fn test_0d() {
-    run_instruction_test_case("tests/instructions_cases/0d.json");
+    run_instruction_test_case("tests/instructions_cases/0D.json");
 }
 
 #[test]
 fn test_0e() {
-    run_instruction_test_case("tests/instructions_cases/0e.json");
+    run_instruction_test_case("tests/instructions_cases/0E.json");
 }
