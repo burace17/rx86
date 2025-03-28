@@ -355,8 +355,13 @@ sf: {:?}",
         segment_offset: u16,
         value: u16,
     ) {
+        let bytes = value.to_le_bytes();
+
         let effective_address = self.compute_effective_address(access_type, segment_offset);
-        write_word(&mut self.mem, effective_address, value);
+        self.mem[effective_address] = bytes[0];
+
+        let effective_address = self.compute_effective_address(access_type, segment_offset.wrapping_add(1));
+        self.mem[effective_address] = bytes[1];
     }
 
     fn get_register_value(&self, target_register: CpuRegister) -> u16 {
@@ -897,7 +902,7 @@ sf: {:?}",
 
     fn push(&mut self, register: CpuRegister) -> u16 {
         // TODO: 286 handles this differently..
-        self.sp -= 2;
+        self.sp = self.sp.wrapping_sub(2);
         let value = self.get_register_value(register);
         self.write_mem_word(CpuMemoryAccessType::StackOperation, self.sp, value);
         1
@@ -905,7 +910,7 @@ sf: {:?}",
 
     fn push_val(&mut self, value: u16) -> u16 {
         // TODO: 286 handles this differently..
-        self.sp -= 2;
+        self.sp = self.sp.wrapping_sub(2);
         self.write_mem_word(CpuMemoryAccessType::StackOperation, self.sp, value);
         1
     }
@@ -915,7 +920,7 @@ sf: {:?}",
             register,
             self.read_mem_word(CpuMemoryAccessType::StackOperation, self.sp),
         );
-        self.sp += 2;
+        self.sp = self.sp.wrapping_add(2);
         1
     }
 

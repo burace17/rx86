@@ -65,59 +65,43 @@ fn set_cpu_state_from_test_case(cpu: &mut Cpu, test_case: &InstructionTestCase) 
     }
 }
 
+fn cpu_assert_matches_expected<T>(test: &InstructionTestCase, value_name: &str, current: T, expected: Option<T>)
+where
+    T: std::fmt::Debug + PartialEq
+{
+    if let Some(expected) = expected {
+        assert_eq!(current, expected, "{} ({}): unexpected {} value", test.name, test.idx, value_name);
+    }
+}
+
 fn check_cpu_state_after_test(cpu: &Cpu, test_case: &InstructionTestCase) {
-    if let Some(ax) = test_case.final_state.regs.ax {
-        assert_eq!(cpu.ax, ax, "unexpected ax value after: {}", test_case.name);
-    }
-    if let Some(bx) = test_case.final_state.regs.bx {
-        assert_eq!(cpu.bx, bx, "unexpected bx value after: {}", test_case.name);
-    }
-    if let Some(cx) = test_case.final_state.regs.cx {
-        assert_eq!(cpu.cx, cx, "unexpected cx value after: {}", test_case.name);
-    }
-    if let Some(dx) = test_case.final_state.regs.dx {
-        assert_eq!(cpu.dx, dx, "unexpected dx value after: {}", test_case.name);
-    }
-    if let Some(si) = test_case.final_state.regs.si {
-        assert_eq!(cpu.si, si, "unexpected si value after: {}", test_case.name);
-    }
-    if let Some(di) = test_case.final_state.regs.di {
-        assert_eq!(cpu.di, di, "unexpected di value after: {}", test_case.name);
-    }
-    if let Some(bp) = test_case.final_state.regs.bp {
-        assert_eq!(cpu.bp, bp, "unexpected bp value after: {}", test_case.name);
-    }
-    if let Some(sp) = test_case.final_state.regs.sp {
-        assert_eq!(cpu.sp, sp, "unexpected sp value after: {}", test_case.name);
-    }
-    if let Some(ip) = test_case.final_state.regs.ip {
-        assert_eq!(cpu.ip, ip, "unexpected ip value after: {}", test_case.name);
-    }
-    if let Some(cs) = test_case.final_state.regs.cs {
-        assert_eq!(cpu.cs, cs, "unexpected cs value after: {}", test_case.name);
-    }
-    if let Some(ds) = test_case.final_state.regs.ds {
-        assert_eq!(cpu.ds, ds, "unexpected ds value after: {}", test_case.name);
-    }
-    if let Some(ss) = test_case.final_state.regs.ss {
-        assert_eq!(cpu.ss, ss, "unexpected ss value after: {}", test_case.name);
-    }
-    if let Some(es) = test_case.final_state.regs.es {
-        assert_eq!(cpu.es, es, "unexpected es value after: {}", test_case.name);
-    }
+    cpu_assert_matches_expected(&test_case, "ax", cpu.ax, test_case.final_state.regs.ax);
+    cpu_assert_matches_expected(&test_case, "bx", cpu.bx, test_case.final_state.regs.bx);
+    cpu_assert_matches_expected(&test_case, "cx", cpu.cx, test_case.final_state.regs.cx);
+    cpu_assert_matches_expected(&test_case, "dx", cpu.dx, test_case.final_state.regs.dx);
+    cpu_assert_matches_expected(&test_case, "si", cpu.si, test_case.final_state.regs.si);
+    cpu_assert_matches_expected(&test_case, "di", cpu.di, test_case.final_state.regs.di);
+    cpu_assert_matches_expected(&test_case, "bp", cpu.bp, test_case.final_state.regs.bp);
+    cpu_assert_matches_expected(&test_case, "sp", cpu.sp, test_case.final_state.regs.sp);
+    cpu_assert_matches_expected(&test_case, "ip", cpu.ip, test_case.final_state.regs.ip);
+    cpu_assert_matches_expected(&test_case, "cs", cpu.cs, test_case.final_state.regs.cs);
+    cpu_assert_matches_expected(&test_case, "ds", cpu.ds, test_case.final_state.regs.ds);
+    cpu_assert_matches_expected(&test_case, "ss", cpu.ss, test_case.final_state.regs.ss);
+    cpu_assert_matches_expected(&test_case, "es", cpu.es, test_case.final_state.regs.es);
     for pair in test_case.final_state.ram.iter() {
         assert_eq!(
             cpu.mem[pair[0]], pair[1] as u8,
-            "unexpected ram value at {} after: {}",
-            pair[0], test_case.name
+            "{} ({}): unexpected ram value at {}",
+            test_case.name, test_case.idx, pair[0]
         );
+        cpu_assert_matches_expected(&test_case, "ram", cpu.mem[pair[0]], Some(pair[1] as u8));
     }
     if let Some(flags) = test_case.final_state.regs.flags {
         let test_case_flags = rx86::cpu::CpuFlags::from_bits_retain(flags);
         assert_eq!(
             cpu.flag, test_case_flags,
-            "unexpected flags value after: {}",
-            test_case.name
+            "{} ({}): unexpected flags value",
+            test_case.name, test_case.idx
         );
     }
 }
@@ -169,4 +153,34 @@ fn test_06() {
 #[test]
 fn test_08() {
     run_instruction_test_case("tests/instructions_cases/08.json");
+}
+
+#[test]
+fn test_09() {
+    run_instruction_test_case("tests/instructions_cases/09.json");
+}
+
+#[test]
+fn test_0a() {
+    run_instruction_test_case("tests/instructions_cases/0a.json");
+}
+
+#[test]
+fn test_0b() {
+    run_instruction_test_case("tests/instructions_cases/0b.json");
+}
+
+#[test]
+fn test_0c() {
+    run_instruction_test_case("tests/instructions_cases/0c.json");
+}
+
+#[test]
+fn test_0d() {
+    run_instruction_test_case("tests/instructions_cases/0d.json");
+}
+
+#[test]
+fn test_0e() {
+    run_instruction_test_case("tests/instructions_cases/0e.json");
 }
