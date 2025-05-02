@@ -242,3 +242,23 @@ fn test_18() {
 fn test_19() {
     run_instruction_test_case("tests/instructions_cases/19.json");
 }
+
+#[test]
+fn test_1a() {
+    run_instruction_test_case("tests/instructions_cases/1A.json");
+}
+
+#[test]
+fn test_1b() {
+    run_instruction_test_case("tests/instructions_cases/1B.json");
+}
+
+#[test]
+fn test_1c() {
+    run_instruction_test_case("tests/instructions_cases/1C.json");
+}
+
+#[test]
+fn test_1d() {
+    run_instruction_test_case("tests/instructions_cases/1D.json");
+}
