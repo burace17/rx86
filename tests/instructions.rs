@@ -128,147 +128,43 @@ fn run_instruction_test_case(path: &str) {
     }
 }
 
-#[test]
-fn test_00() {
-    run_instruction_test_case("tests/instructions_cases/00.json");
+macro_rules! instruction_test_case {
+    ($name:ident, $path:expr) => {
+        #[test]
+        fn $name() {
+            run_instruction_test_case($path);
+        }
+    };
 }
 
-#[test]
-fn test_01() {
-    run_instruction_test_case("tests/instructions_cases/01.json");
-}
-
-#[test]
-fn test_02() {
-    run_instruction_test_case("tests/instructions_cases/02.json");
-}
-
-#[test]
-fn test_03() {
-    run_instruction_test_case("tests/instructions_cases/03.json");
-}
-
-#[test]
-fn test_05() {
-    run_instruction_test_case("tests/instructions_cases/05.json");
-}
-
-#[test]
-fn test_06() {
-    run_instruction_test_case("tests/instructions_cases/06.json");
-}
-
-#[test]
-fn test_08() {
-    run_instruction_test_case("tests/instructions_cases/08.json");
-}
-
-#[test]
-fn test_09() {
-    run_instruction_test_case("tests/instructions_cases/09.json");
-}
-
-#[test]
-fn test_0a() {
-    run_instruction_test_case("tests/instructions_cases/0A.json");
-}
-
-#[test]
-fn test_0b() {
-    run_instruction_test_case("tests/instructions_cases/0B.json");
-}
-
-#[test]
-fn test_0c() {
-    run_instruction_test_case("tests/instructions_cases/0C.json");
-}
-
-#[test]
-fn test_0d() {
-    run_instruction_test_case("tests/instructions_cases/0D.json");
-}
-
-#[test]
-fn test_0e() {
-    run_instruction_test_case("tests/instructions_cases/0E.json");
-}
-
-#[test]
-fn test_10() {
-    run_instruction_test_case("tests/instructions_cases/10.json");
-}
-
-#[test]
-fn test_11() {
-    run_instruction_test_case("tests/instructions_cases/11.json");
-}
-
-#[test]
-fn test_12() {
-    run_instruction_test_case("tests/instructions_cases/12.json");
-}
-
-#[test]
-fn test_13() {
-    run_instruction_test_case("tests/instructions_cases/13.json");
-}
-
-#[test]
-fn test_14() {
-    run_instruction_test_case("tests/instructions_cases/14.json");
-}
-
-#[test]
-fn test_15() {
-    run_instruction_test_case("tests/instructions_cases/15.json");
-}
-
-#[test]
-fn test_16() {
-    run_instruction_test_case("tests/instructions_cases/16.json");
-}
-
-#[test]
-fn test_17() {
-    run_instruction_test_case("tests/instructions_cases/17.json");
-}
-
-#[test]
-fn test_18() {
-    run_instruction_test_case("tests/instructions_cases/18.json");
-}
-
-#[test]
-fn test_19() {
-    run_instruction_test_case("tests/instructions_cases/19.json");
-}
-
-#[test]
-fn test_1a() {
-    run_instruction_test_case("tests/instructions_cases/1A.json");
-}
-
-#[test]
-fn test_1b() {
-    run_instruction_test_case("tests/instructions_cases/1B.json");
-}
-
-#[test]
-fn test_1c() {
-    run_instruction_test_case("tests/instructions_cases/1C.json");
-}
-
-#[test]
-fn test_1d() {
-    run_instruction_test_case("tests/instructions_cases/1D.json");
-}
-
-#[test]
-fn test_1e() {
-    run_instruction_test_case("tests/instructions_cases/1E.json");
-}
-
-#[test]
-fn test_1f() {
-    run_instruction_test_case("tests/instructions_cases/1F.json");
-}
+instruction_test_case!(test_00, "tests/instructions_cases/00.json");
+instruction_test_case!(test_01, "tests/instructions_cases/01.json");
+instruction_test_case!(test_02, "tests/instructions_cases/02.json");
+instruction_test_case!(test_03, "tests/instructions_cases/03.json");
+instruction_test_case!(test_04, "tests/instructions_cases/04.json");
+instruction_test_case!(test_05, "tests/instructions_cases/05.json");
+instruction_test_case!(test_06, "tests/instructions_cases/06.json");
+instruction_test_case!(test_07, "tests/instructions_cases/07.json");
+instruction_test_case!(test_08, "tests/instructions_cases/08.json");
+instruction_test_case!(test_09, "tests/instructions_cases/09.json");
+instruction_test_case!(test_0a, "tests/instructions_cases/0A.json");
+instruction_test_case!(test_0b, "tests/instructions_cases/0B.json");
+instruction_test_case!(test_0c, "tests/instructions_cases/0C.json");
+instruction_test_case!(test_0d, "tests/instructions_cases/0D.json");
+instruction_test_case!(test_0e, "tests/instructions_cases/0E.json");
+instruction_test_case!(test_10, "tests/instructions_cases/10.json");
+instruction_test_case!(test_11, "tests/instructions_cases/11.json");
+instruction_test_case!(test_12, "tests/instructions_cases/12.json");
+instruction_test_case!(test_13, "tests/instructions_cases/13.json");
+instruction_test_case!(test_14, "tests/instructions_cases/14.json");
+instruction_test_case!(test_15, "tests/instructions_cases/15.json");
+instruction_test_case!(test_16, "tests/instructions_cases/16.json");
+instruction_test_case!(test_17, "tests/instructions_cases/17.json");
+instruction_test_case!(test_18, "tests/instructions_cases/18.json");
+instruction_test_case!(test_19, "tests/instructions_cases/19.json");
+instruction_test_case!(test_1a, "tests/instructions_cases/1A.json");
+instruction_test_case!(test_1b, "tests/instructions_cases/1B.json");
+instruction_test_case!(test_1c, "tests/instructions_cases/1C.json");
+instruction_test_case!(test_1d, "tests/instructions_cases/1D.json");
+instruction_test_case!(test_1e, "tests/instructions_cases/1E.json");
+instruction_test_case!(test_1f, "tests/instructions_cases/1F.json");
