@@ -1,6 +1,6 @@
 use std::{
     fmt::UpperHex,
-    ops::{Add, BitAndAssign, BitOrAssign, BitXorAssign},
+    ops::{Add, BitAnd, BitAndAssign, BitOrAssign, BitXor, BitXorAssign, Sub},
 };
 
 use num_conv::CastSigned;
@@ -9,7 +9,11 @@ use num_traits::{Bounded, WrappingAdd, WrappingSub, Zero};
 use crate::bits::Bits;
 
 pub trait Upcast {
-    type UpcastedType: Add<Output: PartialOrd<Self::UpcastedType>> + PartialOrd + WrappingAdd;
+    type UpcastedType: Add<Output: PartialOrd<Self::UpcastedType>>
+        + PartialOrd
+        + WrappingAdd
+        + WrappingSub
+        + Copy;
 
     fn upcast(&self) -> Self::UpcastedType;
 }
@@ -41,12 +45,15 @@ pub trait NumericOps:
     + Upcast
     + Bounded
     + Add
+    + Sub
+    + BitXor<Output: BitXor + BitAnd>
     + BitOrAssign
     + BitAndAssign
     + BitXorAssign
     + UpperHex
     + From<bool>
     + CalcFlags
+    + std::fmt::Display
 {
 }
 
@@ -54,18 +61,31 @@ impl NumericOps for u8 {}
 impl NumericOps for u16 {}
 
 // should this really be a trait....?
-pub trait CalcFlags {
+pub trait CalcFlags: Upcast {
     fn calc_overflow(a: Self, b: Self, result: Self) -> bool;
+    fn calc_overflow_adc(a: Self, b: Self, result: Self::UpcastedType) -> bool;
+    fn calc_overflow_sbb(a: Self, b: Self, result: Self::UpcastedType) -> bool;
     fn calc_af(a: Self, b: Self, result: Self) -> bool;
+    fn calc_af_sbb(a: Self, b: Self, result: Self::UpcastedType) -> bool;
     fn calc_parity(result: Self) -> bool;
 }
 
 impl CalcFlags for u8 {
     fn calc_overflow(a: Self, b: Self, result: Self) -> bool {
-        (a ^ result) & (b ^ result) & 0x80 != 0
+        (a ^ result) & (b ^ result) & 0x80 == 0x80
+    }
+    fn calc_overflow_adc(a: Self, b: Self, result: Self::UpcastedType) -> bool {
+        (a.upcast() ^ result) & (b.upcast() ^ result) & 0x80 == 0x80
+    }
+    fn calc_overflow_sbb(a: Self, b: Self, result: Self::UpcastedType) -> bool {
+        (a.upcast() ^ result) & (a.upcast() ^ b.upcast()) & 0x80 != 0
     }
     fn calc_af(a: Self, b: Self, result: Self) -> bool {
-        (a ^ b ^ result) & 0x10 != 0
+        ((a ^ b ^ result) & 0x10) == 0x10
+    }
+    fn calc_af_sbb(a: Self, b: Self, result: Self::UpcastedType) -> bool {
+        println!("a: {:X}, b: {:X}, result: {:X}", a, b, result);
+        ((a.upcast() ^ b.upcast() ^ result) & 0x10) != 0
     }
     fn calc_parity(result: Self) -> bool {
         result.count_ones() % 2 == 0
@@ -74,10 +94,19 @@ impl CalcFlags for u8 {
 
 impl CalcFlags for u16 {
     fn calc_overflow(a: Self, b: Self, result: Self) -> bool {
-        (a ^ result) & (b ^ result) & 0x8000 != 0
+        (a ^ result) & (b ^ result) & 0x8000 == 0x8000
+    }
+    fn calc_overflow_adc(a: Self, b: Self, result: Self::UpcastedType) -> bool {
+        (a.upcast() ^ result) & (b.upcast() ^ result) & 0x8000 == 0x8000
+    }
+    fn calc_overflow_sbb(a: Self, b: Self, result: Self::UpcastedType) -> bool {
+        (a.upcast() ^ result) & (a.upcast() ^ b.upcast()) & 0x8000 != 0
     }
     fn calc_af(a: Self, b: Self, result: Self) -> bool {
-        (a.get_low() ^ b.get_low() ^ result.get_low()) & 0x10 != 0
+        ((a ^ b ^ result) & 0x10) == 0x10
+    }
+    fn calc_af_sbb(a: Self, b: Self, result: Self::UpcastedType) -> bool {
+        ((a.upcast() ^ b.upcast() ^ result) & 0x10) != 0
     }
     fn calc_parity(result: Self) -> bool {
         result.get_low().count_ones() % 2 == 0

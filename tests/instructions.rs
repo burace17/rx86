@@ -65,12 +65,20 @@ fn set_cpu_state_from_test_case(cpu: &mut Cpu, test_case: &InstructionTestCase) 
     }
 }
 
-fn cpu_assert_matches_expected<T>(test: &InstructionTestCase, value_name: &str, current: T, expected: Option<T>)
-where
-    T: std::fmt::Debug + PartialEq
+fn cpu_assert_matches_expected<T>(
+    test: &InstructionTestCase,
+    value_name: &str,
+    current: T,
+    expected: Option<T>,
+) where
+    T: std::fmt::Debug + PartialEq,
 {
     if let Some(expected) = expected {
-        assert_eq!(current, expected, "{} ({}): unexpected {} value", test.name, test.idx, value_name);
+        assert_eq!(
+            current, expected,
+            "{} ({}): unexpected {} value",
+            test.name, test.idx, value_name
+        );
     }
 }
 
@@ -188,4 +196,49 @@ fn test_0e() {
 #[test]
 fn test_10() {
     run_instruction_test_case("tests/instructions_cases/10.json");
+}
+
+#[test]
+fn test_11() {
+    run_instruction_test_case("tests/instructions_cases/11.json");
+}
+
+#[test]
+fn test_12() {
+    run_instruction_test_case("tests/instructions_cases/12.json");
+}
+
+#[test]
+fn test_13() {
+    run_instruction_test_case("tests/instructions_cases/13.json");
+}
+
+#[test]
+fn test_14() {
+    run_instruction_test_case("tests/instructions_cases/14.json");
+}
+
+#[test]
+fn test_15() {
+    run_instruction_test_case("tests/instructions_cases/15.json");
+}
+
+#[test]
+fn test_16() {
+    run_instruction_test_case("tests/instructions_cases/16.json");
+}
+
+#[test]
+fn test_17() {
+    run_instruction_test_case("tests/instructions_cases/17.json");
+}
+
+#[test]
+fn test_18() {
+    run_instruction_test_case("tests/instructions_cases/18.json");
+}
+
+#[test]
+fn test_19() {
+    run_instruction_test_case("tests/instructions_cases/19.json");
 }

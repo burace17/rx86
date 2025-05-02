@@ -1,4 +1,4 @@
-use num_traits::WrappingAdd;
+use num_traits::{WrappingAdd, WrappingSub};
 
 use crate::{
     cpu::CpuFlags,
@@ -39,10 +39,18 @@ where
     T: NumericOps,
 {
     let old = *rm;
-    let val = old.wrapping_add(reg);
     let c: T = flags.contains(CpuFlags::CARRY).into();
-    *rm = val.wrapping_add(&c);
-    calc_add_flags(flags, old, *reg, *rm); // check?
+    let val = reg.wrapping_add(&c);
+    *rm = old.wrapping_add(&val);
+    calc_add_flags(flags, old, val, *rm);
+
+    let upcasted = old.upcast() + (*reg).upcast() + c.upcast();
+    flags.set(CpuFlags::CARRY, upcasted > T::max_value().upcast());
+    flags.set(CpuFlags::AUX_CARRY, T::calc_af(old, *reg, *rm));
+    flags.set(
+        CpuFlags::OVERFLOW,
+        T::calc_overflow_adc(old, *reg, upcasted),
+    );
 }
 
 pub fn sub<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
@@ -63,10 +71,14 @@ where
     let val = (*reg).wrapping_add(&c);
     *rm = old.wrapping_sub(&val);
     let carry = old.upcast() < ((*reg).upcast().wrapping_add(&c.upcast()));
+    let upcasted = old.upcast().wrapping_sub(&((*reg).upcast() + c.upcast()));
     flags.set(CpuFlags::CARRY, carry);
     flags.set(CpuFlags::PARITY, T::calc_parity(*rm));
-    flags.set(CpuFlags::OVERFLOW, T::calc_overflow(old, val, *rm));
-    flags.set(CpuFlags::AUX_CARRY, T::calc_af(old, val, *rm));
+    flags.set(
+        CpuFlags::OVERFLOW,
+        T::calc_overflow_sbb(old, *reg, upcasted),
+    );
+    flags.set(CpuFlags::AUX_CARRY, T::calc_af_sbb(old, *reg, upcasted));
     flags.set(CpuFlags::ZERO, *rm == T::zero());
     flags.set(CpuFlags::SIGN, calc_sign_bit(*rm));
 }

@@ -360,7 +360,8 @@ sf: {:?}",
         let effective_address = self.compute_effective_address(access_type, segment_offset);
         self.mem[effective_address] = bytes[0];
 
-        let effective_address = self.compute_effective_address(access_type, segment_offset.wrapping_add(1));
+        let effective_address =
+            self.compute_effective_address(access_type, segment_offset.wrapping_add(1));
         self.mem[effective_address] = bytes[1];
     }
 
@@ -799,12 +800,15 @@ sf: {:?}",
         RmSetter: Fn(&mut Self, RegisterOrMemory, InstructionDataType),
         RegGetter: Fn(&Self, ModRmByte, u16) -> InstructionDataType,
         RegSetter: Fn(&mut Self, u8, InstructionDataType),
-        InstructionDataType: UpperHex + PartialEq + Copy
+        InstructionDataType: UpperHex + PartialEq + Copy,
     {
         let modrm_byte = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
         let modrm_byte = parse_mod_rm_byte(modrm_byte);
         let (id_mod, id_reg, id_rm) = modrm_byte.unpack();
-        debug!("mod: 0x{:X}, reg: 0x{:X}, rm: 0x{:X}", id_mod, id_reg, id_rm);
+        debug!(
+            "mod: 0x{:X}, reg: 0x{:X}, rm: 0x{:X}",
+            id_mod, id_reg, id_rm
+        );
 
         if is_addressing_mode(id_mod) {
             let (address, ip_increment) = self.read_address_from_modrm(id_mod, id_rm);
