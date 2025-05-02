@@ -340,8 +340,14 @@ sf: {:?}",
     }
 
     fn read_mem_word(&self, access_type: CpuMemoryAccessType, segment_offset: u16) -> u16 {
+        let mut bytes: [u8; 2] = [0; 2];
         let effective_address = self.compute_effective_address(access_type, segment_offset);
-        read_word(&self.mem, effective_address)
+        bytes[0] = self.mem[effective_address];
+
+        let effective_address = self.compute_effective_address(access_type, segment_offset.wrapping_add(1));
+        bytes[1] = self.mem[effective_address];
+
+        u16::from_le_bytes(bytes)
     }
 
     /*     fn write_mem_byte(&mut self, access_type: CpuMemoryAccessType, segment_offset: u16, value: u8) {
