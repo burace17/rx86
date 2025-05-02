@@ -84,7 +84,6 @@ impl CalcFlags for u8 {
         ((a ^ b ^ result) & 0x10) == 0x10
     }
     fn calc_af_sbb(a: Self, b: Self, result: Self::UpcastedType) -> bool {
-        println!("a: {:X}, b: {:X}, result: {:X}", a, b, result);
         ((a.upcast() ^ b.upcast() ^ result) & 0x10) != 0
     }
     fn calc_parity(result: Self) -> bool {

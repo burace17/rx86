@@ -60,6 +60,11 @@ where
     let old = *rm;
     *rm = old.wrapping_sub(reg);
     calc_sub_flags(flags, old, *reg, *rm);
+    let upcasted = old.upcast().wrapping_sub(&((*reg).upcast()));
+    flags.set(
+        CpuFlags::OVERFLOW,
+        T::calc_overflow_sbb(old, *reg, upcasted),
+    );
 }
 
 pub fn sub_with_borrow<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
