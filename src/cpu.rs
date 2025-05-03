@@ -1,7 +1,7 @@
 use crate::bits::Bits;
 use crate::instructions::{
-    ModRmByte, RegisterOrMemory, dec_byte, dec_reg, inc_byte, inc_reg, is_addressing_mode, jmp_if,
-    jmp_if_any_set, jmp_if_none_set, parse_mod_rm_byte, swap_reg,
+    ModRmByte, RegisterOrMemory, dec_byte, dec_reg, inc_byte, inc_reg, is_addressing_mode,
+    parse_mod_rm_byte, swap_reg,
 };
 use crate::memory::{read_word, write_word};
 use crate::operations;
@@ -941,6 +941,35 @@ sf: {:?}",
         1
     }
 
+    fn jmp(&mut self) {
+        let mut sip = self.ip as i16;
+        let signed_displacement =
+            (self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1) as i8) as i16;
+        sip = sip.wrapping_add(signed_displacement);
+        self.ip = sip as u16;
+    }
+
+    pub fn jmp_if_any_set(&mut self, mask: CpuFlags) -> u16 {
+        if self.flag.intersects(mask) {
+            self.jmp();
+        }
+        2
+    }
+
+    pub fn jmp_if_none_set(&mut self, mask: CpuFlags) -> u16 {
+        if (self.flag & mask).is_empty() {
+            self.jmp();
+        }
+        2
+    }
+
+    pub fn jmp_if(&mut self, should_jump: bool) -> u16 {
+        if should_jump {
+            self.jmp();
+        }
+        2
+    }
+
     pub fn do_cycle(&mut self) -> bool {
         let opcode = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip);
         let _span_ = debug_span!("do_cycle", "0x{:X}", opcode).entered();
@@ -1040,44 +1069,34 @@ sf: {:?}",
             0x5D => self.pop(CpuRegister::Bp),
             0x5E => self.pop(CpuRegister::Si),
             0x5F => self.pop(CpuRegister::Di),
-            0x70 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::OVERFLOW),
-            0x71 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::OVERFLOW),
-            0x72 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::CARRY),
-            0x73 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::CARRY),
-            0x74 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::ZERO),
-            0x75 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::ZERO),
-            0x76 => jmp_if_any_set(
-                &self.mem,
-                &mut self.ip,
-                self.flag,
-                CpuFlags::CARRY | CpuFlags::ZERO,
+            0x70 => self.jmp_if_any_set(CpuFlags::OVERFLOW),
+            0x71 => self.jmp_if_none_set(CpuFlags::OVERFLOW),
+            0x72 => self.jmp_if_any_set(CpuFlags::CARRY),
+            0x73 => self.jmp_if_none_set(CpuFlags::CARRY),
+            0x74 => self.jmp_if_any_set(CpuFlags::ZERO),
+            0x75 => self.jmp_if_none_set(CpuFlags::ZERO),
+            0x76 => self.jmp_if_any_set(CpuFlags::CARRY | CpuFlags::ZERO),
+            0x77 => self.jmp_if_none_set(CpuFlags::CARRY | CpuFlags::ZERO),
+            0x78 => self.jmp_if_any_set(CpuFlags::SIGN),
+            0x79 => self.jmp_if_none_set(CpuFlags::SIGN),
+            0x7A => self.jmp_if_any_set(CpuFlags::PARITY),
+            0x7B => self.jmp_if_none_set(CpuFlags::PARITY),
+            0x7C => self.jmp_if(
+                self.flag.contains(CpuFlags::SIGN) != self.flag.contains(CpuFlags::OVERFLOW),
             ),
-            0x77 => jmp_if_none_set(
-                &self.mem,
-                &mut self.ip,
-                self.flag,
-                CpuFlags::CARRY | CpuFlags::ZERO,
+            0x7D => self.jmp_if(
+                self.flag.contains(CpuFlags::SIGN) == self.flag.contains(CpuFlags::OVERFLOW),
             ),
-            0x78 => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::SIGN),
-            0x79 => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::SIGN),
-            0x7A => jmp_if_any_set(&self.mem, &mut self.ip, self.flag, CpuFlags::PARITY),
-            0x7B => jmp_if_none_set(&self.mem, &mut self.ip, self.flag, CpuFlags::PARITY),
-            0x7C => jmp_if(&self.mem, &mut self.ip, || {
-                self.flag.contains(CpuFlags::SIGN) != self.flag.contains(CpuFlags::OVERFLOW)
-            }),
-            0x7D => jmp_if(&self.mem, &mut self.ip, || {
-                self.flag.contains(CpuFlags::SIGN) == self.flag.contains(CpuFlags::OVERFLOW)
-            }),
-            0x7E => jmp_if(&self.mem, &mut self.ip, || {
+            0x7E => self.jmp_if(
                 self.flag.contains(CpuFlags::ZERO)
                     || (self.flag.contains(CpuFlags::SIGN)
-                        != self.flag.contains(CpuFlags::OVERFLOW))
-            }),
-            0x7F => jmp_if(&self.mem, &mut self.ip, || {
+                        != self.flag.contains(CpuFlags::OVERFLOW)),
+            ),
+            0x7F => self.jmp_if(
                 !self.flag.contains(CpuFlags::ZERO)
                     && (self.flag.contains(CpuFlags::SIGN)
-                        == self.flag.contains(CpuFlags::OVERFLOW))
-            }),
+                        == self.flag.contains(CpuFlags::OVERFLOW)),
+            ),
             0x80 => self.do_opext_inst(false, false),
             0x81 => self.do_opext_inst(true, false),
             0x82 => self.do_opext_inst(false, false),
