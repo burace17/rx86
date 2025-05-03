@@ -60,10 +60,7 @@ pub fn dec_reg(reg: &mut u16, flags: &mut CpuFlags) -> u16 {
     flags.set(CpuFlags::SIGN, calc_sign_bit(*reg));
     flags.set(CpuFlags::PARITY, u16::calc_parity(*reg));
     let upcasted = old.upcast().wrapping_sub(1);
-    flags.set(
-        CpuFlags::OVERFLOW,
-        u16::calc_overflow_sbb(old, 1, upcasted),
-    );
+    flags.set(CpuFlags::OVERFLOW, u16::calc_overflow_sbb(old, 1, upcasted));
     flags.set(CpuFlags::AUX_CARRY, u16::calc_af(old, 1, *reg));
     1
 }
@@ -86,10 +83,7 @@ pub fn dec_byte(reg: &mut u8, flags: &mut CpuFlags) -> u16 {
     flags.set(CpuFlags::SIGN, calc_sign_bit(*reg));
     flags.set(CpuFlags::PARITY, u8::calc_parity(*reg));
     let upcasted = old.upcast().wrapping_sub(1);
-    flags.set(
-        CpuFlags::OVERFLOW,
-        u8::calc_overflow_sbb(old, 1, upcasted),
-    );
+    flags.set(CpuFlags::OVERFLOW, u8::calc_overflow_sbb(old, 1, upcasted));
     flags.set(CpuFlags::AUX_CARRY, u8::calc_af(old, 1, *reg));
     1
 }

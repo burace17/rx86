@@ -344,7 +344,8 @@ sf: {:?}",
         let effective_address = self.compute_effective_address(access_type, segment_offset);
         bytes[0] = self.mem[effective_address];
 
-        let effective_address = self.compute_effective_address(access_type, segment_offset.wrapping_add(1));
+        let effective_address =
+            self.compute_effective_address(access_type, segment_offset.wrapping_add(1));
         bytes[1] = self.mem[effective_address];
 
         u16::from_le_bytes(bytes)
@@ -926,11 +927,17 @@ sf: {:?}",
     }
 
     fn pop(&mut self, register: CpuRegister) -> u16 {
-        self.set_register_value(
-            register,
-            self.read_mem_word(CpuMemoryAccessType::StackOperation, self.sp),
-        );
-        self.sp = self.sp.wrapping_add(2);
+        if matches!(register, CpuRegister::Sp) {
+            let new_val = self.read_mem_word(CpuMemoryAccessType::StackOperation, self.sp);
+            self.sp = self.sp.wrapping_add(2);
+            self.set_register_value(register, new_val);
+        } else {
+            self.set_register_value(
+                register,
+                self.read_mem_word(CpuMemoryAccessType::StackOperation, self.sp),
+            );
+            self.sp = self.sp.wrapping_add(2);
+        }
         1
     }
 
