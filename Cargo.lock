@@ -107,6 +107,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "instruction_test_generator"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -255,6 +264,7 @@ name = "rx86"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "instruction_test_generator",
  "num-conv",
  "num-traits",
  "serde",
