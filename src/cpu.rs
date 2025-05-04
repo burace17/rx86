@@ -704,7 +704,7 @@ sf: {:?}",
                 ip_increment + 2
             } else if word_inst && imm_byte {
                 let imm_byte =
-                    self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 4) as i8;
+                    self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + ip_increment) as i8;
                 let imm = imm_byte as i16;
                 let mut imm = imm as u16;
                 let mut rm = read_word(&self.mem, &address);
