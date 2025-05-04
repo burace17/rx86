@@ -32,9 +32,9 @@ pub fn parse_mod_rm_byte(modrm: u8) -> ModRmByte {
     }
 }
 
-pub enum RegisterOrMemory {
+pub enum RegisterOrMemory<'a> {
     Register(u8),
-    Memory(usize),
+    Memory(&'a Vec<usize>),
 }
 
 pub fn is_addressing_mode(id_mod: u8) -> bool {
