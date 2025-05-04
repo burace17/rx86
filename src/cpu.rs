@@ -1189,7 +1189,7 @@ sf: {:?}",
                 3
             }
             0xE9 => {
-                self.ip += self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
+                self.ip = self.ip.wrapping_add(self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1));
                 3
             }
             0xEB => {
