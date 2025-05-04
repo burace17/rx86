@@ -49,6 +49,9 @@ pub struct Cpu {
     pub flag: CpuFlags,
     pub mem: Box<[u8]>,
 
+    #[allow(unused)]
+    pub debug: bool,
+
     pub breakpoints: Vec<u16>,
 }
 
@@ -264,7 +267,9 @@ sf: {:?}",
 
     fn cpu_panic(&self, msg: &str) -> ! {
         #[cfg(not(test))]
-        self.debug_break(CpuBreakReason::Panic(msg.to_owned()));
+        if self.debug {
+            self.debug_break(CpuBreakReason::Panic(msg.to_owned()));
+        }
         panic!("{}", msg);
     }
 
@@ -495,22 +500,28 @@ sf: {:?}",
     }
 
     fn get_segment_register_value_by_modrm_reg_code(&self, reg_code: u8) -> u16 {
+        // These instructions are only defined for a reg value of 0-3
+        // however only the first two bits are checked
+        let reg_code = reg_code & 0x03;
         match reg_code {
             0b000 => self.es,
             0b001 => self.cs,
             0b010 => self.ss,
             0b011 => self.ds,
-            _ => self.cpu_panic("set_reg_byte_code: failed to parse REG bits of mod R/M"),
+            _ => unreachable!(),
         }
     }
 
     fn set_segment_register_value_by_modrm_reg_code(&mut self, reg_code: u8, value: u16) {
+        // These instructions are only defined for a reg value of 0-3
+        // however only the first two bits are checked
+        let reg_code = reg_code & 0x03;
         match reg_code {
             0b000 => self.es = value,
             0b001 => println!("warning: ignoring write to CS"),
             0b010 => self.ss = value,
             0b011 => self.ds = value,
-            _ => self.cpu_panic("set_reg_byte_code: failed to parse REG bits of mod R/M"),
+            _ => unreachable!(),
         }
     }
 
