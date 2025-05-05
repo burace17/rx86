@@ -147,3 +147,10 @@ where
     flags.remove(CpuFlags::OVERFLOW);
     flags.remove(CpuFlags::AUX_CARRY);
 }
+
+pub fn test<T>(rm: &mut T, reg: &mut T, flags: &mut CpuFlags)
+where
+    T: NumericOps,
+{
+    only_flags(bitwise_and)(rm, reg, flags)
+}
