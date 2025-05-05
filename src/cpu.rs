@@ -982,6 +982,20 @@ sf: {:?}",
         1
     }
 
+    // will use this for 0x60 in 80186 mode someday.
+/*     fn push_all(&mut self) -> u16 {
+        let sp = self.sp;
+        self.push(CpuRegister::Ax);
+        self.push(CpuRegister::Cx);
+        self.push(CpuRegister::Dx);
+        self.push(CpuRegister::Bx);
+        self.push_val(sp);
+        self.push(CpuRegister::Bp);
+        self.push(CpuRegister::Si);
+        self.push(CpuRegister::Di);
+        1
+    } */
+
     fn jmp(&mut self) {
         let signed_displacement =
             (self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1) as i8) as i16;
@@ -1118,6 +1132,35 @@ sf: {:?}",
             0x5D => self.pop(CpuRegister::Bp),
             0x5E => self.pop(CpuRegister::Si),
             0x5F => self.pop(CpuRegister::Di),
+            // 8086 only: these are duplicated with 0x70-0x7F
+            0x60 => self.jmp_if_any_set(CpuFlags::OVERFLOW),
+            0x61 => self.jmp_if_none_set(CpuFlags::OVERFLOW),
+            0x62 => self.jmp_if_any_set(CpuFlags::CARRY),
+            0x63 => self.jmp_if_none_set(CpuFlags::CARRY),
+            0x64 => self.jmp_if_any_set(CpuFlags::ZERO),
+            0x65 => self.jmp_if_none_set(CpuFlags::ZERO),
+            0x66 => self.jmp_if_any_set(CpuFlags::CARRY | CpuFlags::ZERO),
+            0x67 => self.jmp_if_none_set(CpuFlags::CARRY | CpuFlags::ZERO),
+            0x68 => self.jmp_if_any_set(CpuFlags::SIGN),
+            0x69 => self.jmp_if_none_set(CpuFlags::SIGN),
+            0x6A => self.jmp_if_any_set(CpuFlags::PARITY),
+            0x6B => self.jmp_if_none_set(CpuFlags::PARITY),
+            0x6C => self.jmp_if(
+                self.flag.contains(CpuFlags::SIGN) != self.flag.contains(CpuFlags::OVERFLOW),
+            ),
+            0x6D => self.jmp_if(
+                self.flag.contains(CpuFlags::SIGN) == self.flag.contains(CpuFlags::OVERFLOW),
+            ),
+            0x6E => self.jmp_if(
+                self.flag.contains(CpuFlags::ZERO)
+                    || (self.flag.contains(CpuFlags::SIGN)
+                        != self.flag.contains(CpuFlags::OVERFLOW)),
+            ),
+            0x6F => self.jmp_if(
+                !self.flag.contains(CpuFlags::ZERO)
+                    && (self.flag.contains(CpuFlags::SIGN)
+                        == self.flag.contains(CpuFlags::OVERFLOW)),
+            ),
             0x70 => self.jmp_if_any_set(CpuFlags::OVERFLOW),
             0x71 => self.jmp_if_none_set(CpuFlags::OVERFLOW),
             0x72 => self.jmp_if_any_set(CpuFlags::CARRY),
