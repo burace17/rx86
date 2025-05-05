@@ -1008,6 +1008,16 @@ sf: {:?}",
         }
         2
     }
+    
+    pub fn set_flag(&mut self, flag: CpuFlags) -> u16 {
+        self.flag.set(flag, true);
+        1
+    }
+    
+    pub fn clear_flag(&mut self, flag: CpuFlags) -> u16 {
+        self.flag.remove(flag);
+        1
+    }
 
     pub fn do_cycle(&mut self) -> bool {
         let opcode = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip);
@@ -1202,14 +1212,16 @@ sf: {:?}",
                 should_continue_emulation = false;
                 0
             }
-            0xF8 => {
-                self.flag.remove(CpuFlags::CARRY);
+            0xF5 => {
+                self.flag.set(CpuFlags::CARRY, !self.flag.contains(CpuFlags::CARRY));
                 1
             }
-            0xF9 => {
-                self.flag.set(CpuFlags::CARRY, true);
-                1
-            }
+            0xF8 => self.clear_flag(CpuFlags::CARRY),
+            0xF9 => self.set_flag(CpuFlags::CARRY),
+            0xFA => self.clear_flag(CpuFlags::INTERRUPT),
+            0xFB => self.set_flag(CpuFlags::INTERRUPT),
+            0xFC => self.clear_flag(CpuFlags::DIRECTION),
+            0xFD => self.set_flag(CpuFlags::DIRECTION),
             0xFE => self.do_grp2_inst(|rm, reg, flags| {
                 let _ = match reg {
                     0x00 => inc_byte(rm, flags),
