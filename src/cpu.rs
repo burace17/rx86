@@ -525,23 +525,7 @@ sf: {:?}",
         }
     }
 
-    // From a the mod and rm parts of the modrm byte, return the memory address and instruction length so far
-    fn read_address_from_modrm(
-        &self,
-        id_mod: u8,
-        id_rm: u8,
-        read_size: usize,
-    ) -> (Vec<usize>, u16) {
-        let mut address_indices = Vec::new();
-
-        // Operand is a memory address.
-        let instruction_length = match id_mod {
-            0x00 if id_rm == 0x06 => 4, // bp uses 16 bit displacement
-            0x01 => 3,
-            0x02 => 4,
-            _ => 2,
-        };
-
+    fn compute_segment_offset_from_modrm(&self, id_mod: u8, id_rm: u8) -> u16 {
         let displacement = match id_mod {
             0x01 => {
                 (self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 2) as i8)
@@ -551,71 +535,67 @@ sf: {:?}",
             _ => 0,
         };
 
-        for offset in 0..(read_size as u16) {
-            let address: usize = match id_rm {
-                0x00 => self.compute_effective_address(
-                    CpuMemoryAccessType::Variable,
-                    self.bx
-                        .wrapping_add(self.si)
-                        .wrapping_add_signed(displacement)
-                        .wrapping_add(offset),
-                ),
-                0x01 => self.compute_effective_address(
-                    CpuMemoryAccessType::Variable,
-                    self.bx
-                        .wrapping_add(self.di)
-                        .wrapping_add_signed(displacement)
-                        .wrapping_add(offset),
-                ),
-                0x02 => self.compute_effective_address(
-                    CpuMemoryAccessType::BpBaseRegister,
-                    self.bp
-                        .wrapping_add(self.si)
-                        .wrapping_add_signed(displacement)
-                        .wrapping_add(offset),
-                ),
-                0x03 => self.compute_effective_address(
-                    CpuMemoryAccessType::BpBaseRegister,
-                    self.bp
-                        .wrapping_add(self.di)
-                        .wrapping_add_signed(displacement)
-                        .wrapping_add(offset),
-                ),
-                0x04 => self.compute_effective_address(
-                    CpuMemoryAccessType::Variable,
-                    self.si
-                        .wrapping_add_signed(displacement)
-                        .wrapping_add(offset),
-                ),
-                0x05 => self.compute_effective_address(
-                    CpuMemoryAccessType::Variable,
-                    self.di
-                        .wrapping_add_signed(displacement)
-                        .wrapping_add(offset),
-                ),
-                0x06 if id_mod == 0 => self.compute_effective_address(
-                    CpuMemoryAccessType::Variable,
-                    self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 2)
-                        .wrapping_add(offset),
-                ),
-                0x06 => self.compute_effective_address(
-                    CpuMemoryAccessType::BpBaseRegister,
-                    self.bp
-                        .wrapping_add_signed(displacement)
-                        .wrapping_add(offset),
-                ),
-                0x07 => self.compute_effective_address(
-                    CpuMemoryAccessType::Variable,
-                    self.bx
-                        .wrapping_add_signed(displacement)
-                        .wrapping_add(offset),
-                ),
-                _ => self.cpu_panic("read_address_from_modrm: failed to parse R/M bits of mod R/M"),
-            };
+        let segment_offset = match id_rm {
+            0x00 => self
+                .bx
+                .wrapping_add(self.si)
+                .wrapping_add_signed(displacement),
+            0x01 => self
+                .bx
+                .wrapping_add(self.di)
+                .wrapping_add_signed(displacement),
+            0x02 => self
+                .bp
+                .wrapping_add(self.si)
+                .wrapping_add_signed(displacement),
+            0x03 => self
+                .bp
+                .wrapping_add(self.di)
+                .wrapping_add_signed(displacement),
+            0x04 => self.si.wrapping_add_signed(displacement),
+            0x05 => self.di.wrapping_add_signed(displacement),
+            0x06 if id_mod == 0 => {
+                self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 2)
+            }
+            0x06 => self.bp.wrapping_add_signed(displacement),
+            0x07 => self.bx.wrapping_add_signed(displacement),
+            _ => unreachable!(),
+        };
+        debug!(segment_offset, displacement);
+        segment_offset
+    }
 
+    fn get_instruction_length_from_modrm(id_mod: u8, id_rm: u8) -> u16 {
+        match id_mod {
+            0x00 if id_rm == 0x06 => 4, // bp uses 16 bit displacement
+            0x01 => 3,
+            0x02 => 4,
+            _ => 2,
+        }
+    }
+
+    // From a the mod and rm parts of the modrm byte, return the memory address and instruction length so far
+    fn read_address_from_modrm(
+        &self,
+        id_mod: u8,
+        id_rm: u8,
+        read_size: usize,
+    ) -> (Vec<usize>, u16) {
+        let mut address_indices = Vec::new();
+        let instruction_length = Self::get_instruction_length_from_modrm(id_mod, id_rm);
+        let segment_offset = self.compute_segment_offset_from_modrm(id_mod, id_rm);
+        let access_type = match id_rm {
+            0x00 | 0x01 | 0x04 | 0x05 | 0x07 => CpuMemoryAccessType::Variable,
+            0x06 if id_mod == 0 => CpuMemoryAccessType::Variable,
+            0x02 | 0x03 | 0x06 => CpuMemoryAccessType::BpBaseRegister,
+            _ => self.cpu_panic("read_address_from_modrm: failed to parse R/M bits of mod R/M"),
+        };
+
+        for offset in 0..(read_size as u16) {
+            let loc = segment_offset.wrapping_add(offset);
+            let address = self.compute_effective_address(access_type, loc);
             address_indices.push(address);
         }
-        debug!(instruction_length, displacement);
 
         (address_indices, instruction_length)
     }
@@ -714,8 +694,10 @@ sf: {:?}",
                 write_word(&mut self.mem, &address, rm);
                 ip_increment + 2
             } else if word_inst && imm_byte {
-                let imm_byte =
-                    self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + ip_increment) as i8;
+                let imm_byte = self.read_mem_byte(
+                    CpuMemoryAccessType::InstructionFetch,
+                    self.ip + ip_increment,
+                ) as i8;
                 let imm = imm_byte as i16;
                 let mut imm = imm as u16;
                 let mut rm = read_word(&self.mem, &address);
@@ -983,7 +965,7 @@ sf: {:?}",
     }
 
     // will use this for 0x60 in 80186 mode someday.
-/*     fn push_all(&mut self) -> u16 {
+    /*     fn push_all(&mut self) -> u16 {
         let sp = self.sp;
         self.push(CpuRegister::Ax);
         self.push(CpuRegister::Cx);
@@ -1002,35 +984,44 @@ sf: {:?}",
         self.ip = self.ip.wrapping_add_signed(signed_displacement);
     }
 
-    pub fn jmp_if_any_set(&mut self, mask: CpuFlags) -> u16 {
+    fn jmp_if_any_set(&mut self, mask: CpuFlags) -> u16 {
         if self.flag.intersects(mask) {
             self.jmp();
         }
         2
     }
 
-    pub fn jmp_if_none_set(&mut self, mask: CpuFlags) -> u16 {
+    fn jmp_if_none_set(&mut self, mask: CpuFlags) -> u16 {
         if (self.flag & mask).is_empty() {
             self.jmp();
         }
         2
     }
 
-    pub fn jmp_if(&mut self, should_jump: bool) -> u16 {
+    fn jmp_if(&mut self, should_jump: bool) -> u16 {
         if should_jump {
             self.jmp();
         }
         2
     }
-    
-    pub fn set_flag(&mut self, flag: CpuFlags) -> u16 {
+
+    fn set_flag(&mut self, flag: CpuFlags) -> u16 {
         self.flag.set(flag, true);
         1
     }
-    
-    pub fn clear_flag(&mut self, flag: CpuFlags) -> u16 {
+
+    fn clear_flag(&mut self, flag: CpuFlags) -> u16 {
         self.flag.remove(flag);
         1
+    }
+
+    fn load_effective_address(&mut self) -> u16 {
+        let modrm_byte = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
+        let (id_mod, id_reg, id_rm) = parse_mod_rm_byte(modrm_byte).unpack();
+        let instruction_length = Self::get_instruction_length_from_modrm(id_mod, id_rm);
+        let segment_offset = self.compute_segment_offset_from_modrm(id_mod, id_rm);
+        self.set_register_value_by_modrm_reg_code(id_reg, segment_offset);
+        instruction_length
     }
 
     pub fn do_cycle(&mut self) -> bool {
@@ -1202,6 +1193,7 @@ sf: {:?}",
             0x8A => self.do_byte_inst(swap_args(operations::mov)),
             0x8B => self.do_word_inst(swap_args(operations::mov)),
             0x8C => self.do_segment_reg_inst(operations::mov),
+            0x8D => self.load_effective_address(),
             0x8E => self.do_segment_reg_inst(swap_args(operations::mov)),
             0x90 => 1,
             0x91 => swap_reg(&mut self.ax, &mut self.cx),
@@ -1244,7 +1236,9 @@ sf: {:?}",
                 3
             }
             0xE9 => {
-                self.ip = self.ip.wrapping_add(self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1));
+                self.ip = self.ip.wrapping_add(
+                    self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1),
+                );
                 3
             }
             0xEB => {
@@ -1258,7 +1252,8 @@ sf: {:?}",
                 0
             }
             0xF5 => {
-                self.flag.set(CpuFlags::CARRY, !self.flag.contains(CpuFlags::CARRY));
+                self.flag
+                    .set(CpuFlags::CARRY, !self.flag.contains(CpuFlags::CARRY));
                 1
             }
             0xF8 => self.clear_flag(CpuFlags::CARRY),
