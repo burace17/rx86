@@ -963,6 +963,16 @@ sf: {:?}",
         }
         1
     }
+    
+    fn pop_rm(&mut self) -> u16 {
+        let modrm_byte = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
+        let (id_mod, _, id_rm) = parse_mod_rm_byte(modrm_byte).unpack();
+        let (address, instruction_length) = self.read_address_from_modrm(id_mod, id_rm, 2);
+        let val = self.read_mem_word(CpuMemoryAccessType::StackOperation, self.sp);
+        self.sp = self.sp.wrapping_add(2);
+        write_word(&mut self.mem, &address, val);
+        instruction_length
+    }
 
     // will use this for 0x60 in 80186 mode someday.
     /*     fn push_all(&mut self) -> u16 {
@@ -1195,6 +1205,7 @@ sf: {:?}",
             0x8C => self.do_segment_reg_inst(operations::mov),
             0x8D => self.load_effective_address(),
             0x8E => self.do_segment_reg_inst(swap_args(operations::mov)),
+            0x8F => self.pop_rm(),
             0x90 => 1,
             0x91 => swap_reg(&mut self.ax, &mut self.cx),
             0x92 => swap_reg(&mut self.ax, &mut self.dx),
