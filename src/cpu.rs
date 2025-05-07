@@ -16,14 +16,31 @@ bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Default)]
     pub struct CpuFlags: u16 {
         const CARRY = 1 << 0;
+        const RESERVED_1 = 1 << 1;
         const PARITY = 1 << 2;
+        const RESERVED_2 = 1 << 3;
         const AUX_CARRY = 1 << 4;
+        const RESERVED_3 = 1 << 5;
         const ZERO = 1 << 6;
         const SIGN = 1 << 7;
         const TRAP = 1 << 8;
         const INTERRUPT = 1 << 9;
         const DIRECTION = 1 << 10;
         const OVERFLOW = 1 << 11;
+    }
+}
+
+impl CpuFlags {
+    fn all_non_reserved() -> CpuFlags {
+        CpuFlags::CARRY
+            | CpuFlags::PARITY
+            | CpuFlags::AUX_CARRY
+            | CpuFlags::ZERO
+            | CpuFlags::SIGN
+            | CpuFlags::TRAP
+            | CpuFlags::INTERRUPT
+            | CpuFlags::DIRECTION
+            | CpuFlags::OVERFLOW
     }
 }
 
@@ -963,7 +980,7 @@ sf: {:?}",
         }
         1
     }
-    
+
     fn pop_rm(&mut self) -> u16 {
         let modrm_byte = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
         let (id_mod, _, id_rm) = parse_mod_rm_byte(modrm_byte).unpack();
@@ -972,6 +989,42 @@ sf: {:?}",
         self.sp = self.sp.wrapping_add(2);
         write_word(&mut self.mem, &address, val);
         instruction_length
+    }
+
+    fn pop_flags(&mut self) -> u16 {
+        let val = self.read_mem_word(CpuMemoryAccessType::StackOperation, self.sp);
+        self.sp = self.sp.wrapping_add(2);
+        let new_flags = CpuFlags::from_bits_truncate(val);
+        for flag in CpuFlags::all_non_reserved() {
+            self.flag.set(flag, new_flags.contains(flag));
+        }
+        1
+    }
+
+    fn store_flags(&mut self) -> u16 {
+        let mut ah = CpuFlags::from_bits_retain(self.ax.get_high() as u16);
+        ah.set(CpuFlags::CARRY, self.flag.contains(CpuFlags::CARRY));
+        ah.set(CpuFlags::RESERVED_1, true);
+        ah.set(CpuFlags::PARITY, self.flag.contains(CpuFlags::PARITY));
+        ah.set(CpuFlags::RESERVED_2, false);
+        ah.set(CpuFlags::AUX_CARRY, self.flag.contains(CpuFlags::AUX_CARRY));
+        ah.set(CpuFlags::RESERVED_3, false);
+        ah.set(CpuFlags::ZERO, self.flag.contains(CpuFlags::ZERO));
+        ah.set(CpuFlags::SIGN, self.flag.contains(CpuFlags::SIGN));
+        self.ax.set_high(ah.bits() as u8);
+        1
+    }
+
+    fn load_flags(&mut self) -> u16 {
+        let ah = CpuFlags::from_bits_retain(self.ax.get_high() as u16);
+        self.flag.set(CpuFlags::CARRY, ah.contains(CpuFlags::CARRY));
+        self.flag
+            .set(CpuFlags::PARITY, ah.contains(CpuFlags::PARITY));
+        self.flag
+            .set(CpuFlags::AUX_CARRY, ah.contains(CpuFlags::AUX_CARRY));
+        self.flag.set(CpuFlags::ZERO, ah.contains(CpuFlags::ZERO));
+        self.flag.set(CpuFlags::SIGN, ah.contains(CpuFlags::SIGN));
+        1
     }
 
     // will use this for 0x60 in 80186 mode someday.
@@ -1032,6 +1085,27 @@ sf: {:?}",
         let segment_offset = self.compute_segment_offset_from_modrm(id_mod, id_rm);
         self.set_register_value_by_modrm_reg_code(id_reg, segment_offset);
         instruction_length
+    }
+
+    fn call_near(&mut self) -> u16 {
+        let return_address = self.ip + 3;
+        self.push_val(return_address);
+        // add the displacement to IP
+        let disp = self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
+        // todo check if this is correct
+        self.ip = self.ip.wrapping_add(disp);
+        3
+    }
+
+    fn call_far(&mut self) -> u16 {
+        let return_address = self.ip + 5;
+        let offset = self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
+        let segment = self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 3);
+        self.push_val(self.cs);
+        self.push_val(return_address);
+        self.cs = segment;
+        self.ip = offset;
+        0
     }
 
     pub fn do_cycle(&mut self) -> bool {
@@ -1214,6 +1288,14 @@ sf: {:?}",
             0x95 => swap_reg(&mut self.ax, &mut self.bp),
             0x96 => swap_reg(&mut self.ax, &mut self.si),
             0x97 => swap_reg(&mut self.ax, &mut self.di),
+            0x9A => self.call_far(),
+            0x9C => {
+                self.push_val(self.flag.bits());
+                1
+            }
+            0x9D => self.pop_flags(),
+            0x9E => self.load_flags(),
+            0x9F => self.store_flags(),
             0xB0 => self.do_reg_imm_byte_inst(CpuRegister::Ax, false, operations::mov),
             0xB1 => self.do_reg_imm_byte_inst(CpuRegister::Cx, false, operations::mov),
             0xB2 => self.do_reg_imm_byte_inst(CpuRegister::Dx, false, operations::mov),
@@ -1236,16 +1318,7 @@ sf: {:?}",
                 0
             }
             0xC7 => self.do_rm_imm_word_inst(operations::mov),
-            0xE8 => {
-                // CALL
-                let return_address = self.ip + 3; // next instruction after this one (3 bytes after)
-                self.push_val(return_address);
-                // add the displacement to IP
-                let disp = self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
-                // todo check if this is correct
-                self.ip = self.ip.wrapping_add(disp);
-                3
-            }
+            0xE8 => self.call_near(),
             0xE9 => {
                 self.ip = self.ip.wrapping_add(
                     self.read_mem_word(CpuMemoryAccessType::InstructionFetch, self.ip + 1),
