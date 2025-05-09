@@ -1107,6 +1107,28 @@ sf: {:?}",
         self.ip = offset;
         0
     }
+    
+    fn convert_to_word(&mut self) -> u16 {
+        let al = self.ax.get_low();
+        self.ax = ((al as i8) as i16) as u16;
+        1
+    }
+    
+    fn convert_to_dword(&mut self) -> u16 {
+        let dword = ((self.ax as i16) as i32) as u32;
+        self.dx = (dword >> 16) as u16;
+        1
+    }
+    
+    fn loop_while(&mut self, cond: bool) -> u16 
+    {
+        let disp = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip + 1);
+        self.cx = self.cx.wrapping_sub(1);
+        if self.cx != 0 && cond {
+            self.ip = self.ip.wrapping_add_signed((disp as i8) as i16);
+        }
+        2
+    }
 
     pub fn do_cycle(&mut self) -> bool {
         let opcode = self.read_mem_byte(CpuMemoryAccessType::InstructionFetch, self.ip);
@@ -1288,6 +1310,8 @@ sf: {:?}",
             0x95 => swap_reg(&mut self.ax, &mut self.bp),
             0x96 => swap_reg(&mut self.ax, &mut self.si),
             0x97 => swap_reg(&mut self.ax, &mut self.di),
+            0x98 => self.convert_to_word(),
+            0x99 => self.convert_to_dword(),
             0x9A => self.call_far(),
             0x9C => {
                 self.push_val(self.flag.bits());
@@ -1318,6 +1342,10 @@ sf: {:?}",
                 0
             }
             0xC7 => self.do_rm_imm_word_inst(operations::mov),
+            0xE0 => self.loop_while(!self.flag.contains(CpuFlags::ZERO)),
+            0xE1 => self.loop_while(self.flag.contains(CpuFlags::ZERO)),
+            0xE2 => self.loop_while(true),
+            0xE3 => self.jmp_if(self.cx == 0),
             0xE8 => self.call_near(),
             0xE9 => {
                 self.ip = self.ip.wrapping_add(
